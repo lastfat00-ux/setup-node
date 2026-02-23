@@ -68,11 +68,15 @@ export default abstract class BaseDistribution {
     let version = '';
 
     const {range, options} = this.validRange(this.nodeInfo.versionSpec);
+    // Pre-parse the range to avoid redundant parsing in the loop
+    const rangeObj = new semver.Range(range, options);
 
     core.debug(`evaluating ${versions.length} versions`);
 
     for (const potential of versions) {
-      const satisfied: boolean = semver.satisfies(potential, range, options);
+      // semver.satisfies accepts a Range object as the second argument
+      // which is more efficient as it skips range parsing
+      const satisfied: boolean = semver.satisfies(potential, rangeObj, options);
       if (satisfied) {
         version = potential;
         break;

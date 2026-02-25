@@ -67,7 +67,12 @@ export default abstract class BaseDistribution {
   protected evaluateVersions(versions: string[]): string {
     let version = '';
 
-    const {range, options} = this.validRange(this.nodeInfo.versionSpec);
+    const {range: rangeSpec, options} = this.validRange(
+      this.nodeInfo.versionSpec
+    );
+
+    // Pre-parse the range to avoid redundant parsing in the loop
+    const range = new semver.Range(rangeSpec, options);
 
     core.debug(`evaluating ${versions.length} versions`);
 

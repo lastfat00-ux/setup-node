@@ -81635,7 +81635,10 @@ class BaseDistribution {
     }
     evaluateVersions(versions) {
         let version = '';
-        const { range, options } = this.validRange(this.nodeInfo.versionSpec);
+        const { range: rangeStr, options } = this.validRange(this.nodeInfo.versionSpec);
+        // Pre-parsing the range to a semver.Range object improves performance by avoiding
+        // redundant parsing of the same range string in the loop below.
+        const range = new semver_1.default.Range(rangeStr, options);
         core.debug(`evaluating ${versions.length} versions`);
         for (const potential of versions) {
             const satisfied = semver_1.default.satisfies(potential, range, options);

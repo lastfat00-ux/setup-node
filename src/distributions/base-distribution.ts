@@ -67,12 +67,14 @@ export default abstract class BaseDistribution {
   protected evaluateVersions(versions: string[]): string {
     let version = '';
 
-    const {range, options} = this.validRange(this.nodeInfo.versionSpec);
+    const range = this.validRange(this.nodeInfo.versionSpec);
 
     core.debug(`evaluating ${versions.length} versions`);
 
     for (const potential of versions) {
-      const satisfied: boolean = semver.satisfies(potential, range, options);
+      // Using range.test(version) is more efficient than semver.satisfies(version, range)
+      // because it avoids redundant parsing and object instantiation inside the loop.
+      const satisfied: boolean = range.test(potential);
       if (satisfied) {
         version = potential;
         break;
@@ -174,7 +176,7 @@ export default abstract class BaseDistribution {
     const c = semver.clean(versionSpec) || '';
     const valid = semver.valid(c) ?? versionSpec;
 
-    return {range: valid, options};
+    return new semver.Range(valid, options);
   }
 
   protected async acquireWindowsNodeFromFallbackLocation(

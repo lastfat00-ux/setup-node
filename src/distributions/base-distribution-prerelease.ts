@@ -44,7 +44,7 @@ export default abstract class BasePrereleaseNodejs extends BaseDistribution {
       range = `${semver.validRange(`^${rawVersion}-${this.distribution}`)}-0`;
     }
 
-    return {range, options: {includePrerelease: !isValidVersion}};
+    return new semver.Range(range, {includePrerelease: !isValidVersion});
   }
 
   protected splitVersionSpec(versionSpec: string) {

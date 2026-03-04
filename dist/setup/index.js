@@ -81528,7 +81528,7 @@ class BasePrereleaseNodejs extends base_distribution_1.default {
         else {
             range = `${semver_1.default.validRange(`^${rawVersion}-${this.distribution}`)}-0`;
         }
-        return { range, options: { includePrerelease: !isValidVersion } };
+        return new semver_1.default.Range(range, { includePrerelease: !isValidVersion });
     }
     splitVersionSpec(versionSpec) {
         return versionSpec.split(/-(.*)/s);
@@ -81635,10 +81635,12 @@ class BaseDistribution {
     }
     evaluateVersions(versions) {
         let version = '';
-        const { range, options } = this.validRange(this.nodeInfo.versionSpec);
+        const range = this.validRange(this.nodeInfo.versionSpec);
         core.debug(`evaluating ${versions.length} versions`);
         for (const potential of versions) {
-            const satisfied = semver_1.default.satisfies(potential, range, options);
+            // Using range.test(version) is more efficient than semver.satisfies(version, range)
+            // because it avoids redundant parsing and object instantiation inside the loop.
+            const satisfied = range.test(potential);
             if (satisfied) {
                 version = potential;
                 break;
@@ -81707,7 +81709,7 @@ class BaseDistribution {
         let options;
         const c = semver_1.default.clean(versionSpec) || '';
         const valid = semver_1.default.valid(c) ?? versionSpec;
-        return { range: valid, options };
+        return new semver_1.default.Range(valid, options);
     }
     async acquireWindowsNodeFromFallbackLocation(version, arch = os_1.default.arch()) {
         const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);

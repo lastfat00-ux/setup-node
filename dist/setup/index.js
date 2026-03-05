@@ -81637,8 +81637,13 @@ class BaseDistribution {
         let version = '';
         const { range, options } = this.validRange(this.nodeInfo.versionSpec);
         core.debug(`evaluating ${versions.length} versions`);
+        // Optimization: Pre-parse the range string to a Range object.
+        // This is faster than calling semver.satisfies(potential, range, options)
+        // inside the loop, because semver.satisfies() would re-parse the range string
+        // on every iteration. Using rangeObj.test() avoids this overhead.
+        const rangeObj = new semver_1.default.Range(range, options);
         for (const potential of versions) {
-            const satisfied = semver_1.default.satisfies(potential, range, options);
+            const satisfied = rangeObj.test(potential);
             if (satisfied) {
                 version = potential;
                 break;

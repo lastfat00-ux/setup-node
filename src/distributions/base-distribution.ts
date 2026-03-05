@@ -71,8 +71,14 @@ export default abstract class BaseDistribution {
 
     core.debug(`evaluating ${versions.length} versions`);
 
+    // Optimization: Pre-parse the range string to a Range object.
+    // This is faster than calling semver.satisfies(potential, range, options)
+    // inside the loop, because semver.satisfies() would re-parse the range string
+    // on every iteration. Using rangeObj.test() avoids this overhead.
+    const rangeObj = new semver.Range(range, options);
+
     for (const potential of versions) {
-      const satisfied: boolean = semver.satisfies(potential, range, options);
+      const satisfied: boolean = rangeObj.test(potential);
       if (satisfied) {
         version = potential;
         break;

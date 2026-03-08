@@ -56504,7 +56504,7 @@ const diff = (version1, version2) => {
     return prefix + 'patch'
   }
 
-  // high and low are preleases
+  // high and low are prereleases
   return 'prerelease'
 }
 
@@ -57135,8 +57135,8 @@ createToken('MAINVERSIONLOOSE', `(${src[t.NUMERICIDENTIFIERLOOSE]})\\.` +
 
 // ## Pre-release Version Identifier
 // A numeric identifier, or a non-numeric identifier.
-// Non-numberic identifiers include numberic identifiers but can be longer.
-// Therefore non-numberic identifiers must go first.
+// Non-numeric identifiers include numeric identifiers but can be longer.
+// Therefore non-numeric identifiers must go first.
 
 createToken('PRERELEASEIDENTIFIER', `(?:${src[t.NONNUMERICIDENTIFIER]
 }|${src[t.NUMERICIDENTIFIER]})`)
@@ -57658,7 +57658,7 @@ const compare = __nccwpck_require__(78469)
 // - If LT
 //   - If LT.semver is greater than any < or <= comp in C, return false
 //   - If LT is <=, and LT.semver does not satisfy every C, return false
-//   - If GT.semver has a prerelease, and not in prerelease mode
+//   - If LT.semver has a prerelease, and not in prerelease mode
 //     - If no C has a prerelease and the LT.semver tuple, return false
 // - Else return true
 
@@ -81693,9 +81693,13 @@ class BaseDistribution {
     evaluateVersions(versions) {
         let version = '';
         const { range, options } = this.validRange(this.nodeInfo.versionSpec);
+        // Pre-parse the range to avoid redundant parsing in the loop
+        const rangeObj = new semver_1.default.Range(range, options);
         core.debug(`evaluating ${versions.length} versions`);
         for (const potential of versions) {
-            const satisfied = semver_1.default.satisfies(potential, range, options);
+            // Using rangeObj.test(potential) is more efficient than semver.satisfies
+            // as it avoids unnecessary Range object instantiation inside the method.
+            const satisfied = rangeObj.test(potential);
             if (satisfied) {
                 version = potential;
                 break;

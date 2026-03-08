@@ -73,9 +73,9 @@ export default abstract class BaseDistribution {
     core.debug(`evaluating ${versions.length} versions`);
 
     for (const potential of versions) {
-      // semver.satisfies accepts a Range object as the second argument
-      // which is more efficient as it skips range parsing
-      const satisfied: boolean = semver.satisfies(potential, rangeObj, options);
+      // Using rangeObj.test(potential) is more efficient than semver.satisfies
+      // as it avoids unnecessary Range object instantiation inside the method.
+      const satisfied: boolean = rangeObj.test(potential);
       if (satisfied) {
         version = potential;
         break;

@@ -81652,6 +81652,7 @@ class BaseDistribution {
     nodeInfo;
     httpClient;
     osPlat = os_1.default.platform();
+    cachedNodeJsVersions;
     constructor(nodeInfo) {
         this.nodeInfo = nodeInfo;
         this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -81693,9 +81694,13 @@ class BaseDistribution {
     evaluateVersions(versions) {
         let version = '';
         const { range, options } = this.validRange(this.nodeInfo.versionSpec);
+        // Pre-parse the range to avoid redundant parsing in the loop
+        const rangeObj = new semver_1.default.Range(range, options);
         core.debug(`evaluating ${versions.length} versions`);
         for (const potential of versions) {
-            const satisfied = semver_1.default.satisfies(potential, range, options);
+            // Using rangeObj.test(potential) is more efficient than semver.satisfies(potential, rangeObj)
+            // because it bypasses the internal wrapper logic that checks if rangeObj is an instance of Range.
+            const satisfied = rangeObj.test(potential);
             if (satisfied) {
                 version = potential;
                 break;
@@ -81713,6 +81718,9 @@ class BaseDistribution {
         return tc.find('node', this.nodeInfo.versionSpec, this.translateArchToDistUrl(this.nodeInfo.arch));
     }
     async getNodeJsVersions() {
+        if (this.cachedNodeJsVersions) {
+            return this.cachedNodeJsVersions;
+        }
         const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
         const dataUrl = `${initialUrl}/index.json`;
         const headers = {};
@@ -81720,7 +81728,8 @@ class BaseDistribution {
             headers['Authorization'] = this.nodeInfo.mirrorToken;
         }
         const response = await this.httpClient.getJson(dataUrl, headers);
-        return response.result || [];
+        this.cachedNodeJsVersions = response.result || [];
+        return this.cachedNodeJsVersions;
     }
     getNodejsDistInfo(version) {
         const osArch = this.translateArchToDistUrl(this.nodeInfo.arch);
@@ -82008,6 +82017,7 @@ const tc = __importStar(__nccwpck_require__(33472));
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const base_distribution_1 = __importDefault(__nccwpck_require__(60709));
 class OfficialBuilds extends base_distribution_1.default {
+    cachedManifest;
     constructor(nodeInfo) {
         super(nodeInfo);
     }
@@ -82119,9 +82129,13 @@ class OfficialBuilds extends base_distribution_1.default {
         const url = mirror || 'https://nodejs.org';
         return `${url}/dist`;
     }
-    getManifest() {
+    async getManifest() {
+        if (this.cachedManifest) {
+            return this.cachedManifest;
+        }
         core.debug('Getting manifest from actions/node-versions@main');
-        return tc.getManifestFromRepo('actions', 'node-versions', this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth, 'main');
+        this.cachedManifest = await tc.getManifestFromRepo('actions', 'node-versions', this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth, 'main');
+        return this.cachedManifest;
     }
     resolveLtsAliasFromManifest(versionSpec, stable, manifest) {
         const alias = versionSpec.split('lts/')[1]?.toLowerCase();

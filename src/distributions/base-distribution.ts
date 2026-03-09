@@ -15,6 +15,7 @@ import {NodeInputs, INodeVersion, INodeVersionInfo} from './base-models';
 export default abstract class BaseDistribution {
   protected httpClient: hc.HttpClient;
   protected osPlat = os.platform();
+  protected cachedNodeJsVersions?: INodeVersion[];
 
   constructor(protected nodeInfo: NodeInputs) {
     this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -73,9 +74,9 @@ export default abstract class BaseDistribution {
     core.debug(`evaluating ${versions.length} versions`);
 
     for (const potential of versions) {
-      // semver.satisfies accepts a Range object as the second argument
-      // which is more efficient as it skips range parsing
-      const satisfied: boolean = semver.satisfies(potential, rangeObj, options);
+      // Using rangeObj.test(potential) is more efficient than semver.satisfies(potential, rangeObj)
+      // because it bypasses the internal wrapper logic that checks if rangeObj is an instance of Range.
+      const satisfied: boolean = rangeObj.test(potential);
       if (satisfied) {
         version = potential;
         break;
@@ -100,6 +101,10 @@ export default abstract class BaseDistribution {
   }
 
   protected async getNodeJsVersions(): Promise<INodeVersion[]> {
+    if (this.cachedNodeJsVersions) {
+      return this.cachedNodeJsVersions;
+    }
+
     const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
     const dataUrl = `${initialUrl}/index.json`;
 
@@ -113,7 +118,10 @@ export default abstract class BaseDistribution {
       dataUrl,
       headers
     );
-    return response.result || [];
+
+    this.cachedNodeJsVersions = response.result || [];
+
+    return this.cachedNodeJsVersions;
   }
 
   protected getNodejsDistInfo(version: string) {

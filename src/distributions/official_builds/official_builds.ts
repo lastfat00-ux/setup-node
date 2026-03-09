@@ -10,6 +10,8 @@ interface INodeRelease extends tc.IToolRelease {
 }
 
 export default class OfficialBuilds extends BaseDistribution {
+  private cachedManifest?: tc.IToolRelease[];
+
   constructor(nodeInfo: NodeInputs) {
     super(nodeInfo);
   }
@@ -183,14 +185,20 @@ export default class OfficialBuilds extends BaseDistribution {
     return `${url}/dist`;
   }
 
-  private getManifest(): Promise<tc.IToolRelease[]> {
+  private async getManifest(): Promise<tc.IToolRelease[]> {
+    if (this.cachedManifest) {
+      return this.cachedManifest;
+    }
+
     core.debug('Getting manifest from actions/node-versions@main');
-    return tc.getManifestFromRepo(
+    this.cachedManifest = await tc.getManifestFromRepo(
       'actions',
       'node-versions',
       this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth,
       'main'
     );
+
+    return this.cachedManifest;
   }
 
   private resolveLtsAliasFromManifest(

@@ -81652,6 +81652,8 @@ class BaseDistribution {
     nodeInfo;
     httpClient;
     osPlat = os_1.default.platform();
+    // In-memory cache for Node.js versions to avoid redundant network requests
+    static cachedNodeJsVersions = new Map();
     constructor(nodeInfo) {
         this.nodeInfo = nodeInfo;
         this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -81693,9 +81695,13 @@ class BaseDistribution {
     evaluateVersions(versions) {
         let version = '';
         const { range, options } = this.validRange(this.nodeInfo.versionSpec);
+        // Pre-parse the range to avoid redundant parsing in the loop
+        const rangeObj = new semver_1.default.Range(range, options);
         core.debug(`evaluating ${versions.length} versions`);
         for (const potential of versions) {
-            const satisfied = semver_1.default.satisfies(potential, range, options);
+            // rangeObj.test(version) is more efficient than semver.satisfies(version, rangeObj)
+            // as it directly checks the version against the already parsed range.
+            const satisfied = rangeObj.test(potential);
             if (satisfied) {
                 version = potential;
                 break;
@@ -81715,12 +81721,19 @@ class BaseDistribution {
     async getNodeJsVersions() {
         const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
         const dataUrl = `${initialUrl}/index.json`;
+        // Check cache before making a network request
+        if (BaseDistribution.cachedNodeJsVersions.has(dataUrl)) {
+            core.debug(`Using cached Node.js versions from ${dataUrl}`);
+            return BaseDistribution.cachedNodeJsVersions.get(dataUrl);
+        }
         const headers = {};
         if (this.nodeInfo.mirrorToken) {
             headers['Authorization'] = this.nodeInfo.mirrorToken;
         }
         const response = await this.httpClient.getJson(dataUrl, headers);
-        return response.result || [];
+        const result = response.result || [];
+        BaseDistribution.cachedNodeJsVersions.set(dataUrl, result);
+        return result;
     }
     getNodejsDistInfo(version) {
         const osArch = this.translateArchToDistUrl(this.nodeInfo.arch);
@@ -82008,6 +82021,8 @@ const tc = __importStar(__nccwpck_require__(33472));
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const base_distribution_1 = __importDefault(__nccwpck_require__(60709));
 class OfficialBuilds extends base_distribution_1.default {
+    // In-memory cache for the versions manifest to avoid redundant network requests
+    static cachedManifest = new Map();
     constructor(nodeInfo) {
         super(nodeInfo);
     }
@@ -82119,9 +82134,21 @@ class OfficialBuilds extends base_distribution_1.default {
         const url = mirror || 'https://nodejs.org';
         return `${url}/dist`;
     }
-    getManifest() {
+    async getManifest() {
+        const auth = this.nodeInfo.mirror
+            ? this.nodeInfo.mirrorToken
+            : this.nodeInfo.auth;
+        // Use a key that includes auth info to ensure cache isolation if needed,
+        // though typically the manifest is the same.
+        const cacheKey = `manifest-${auth || 'no-auth'}`;
+        if (OfficialBuilds.cachedManifest.has(cacheKey)) {
+            core.debug('Using cached manifest from actions/node-versions@main');
+            return OfficialBuilds.cachedManifest.get(cacheKey);
+        }
         core.debug('Getting manifest from actions/node-versions@main');
-        return tc.getManifestFromRepo('actions', 'node-versions', this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth, 'main');
+        const manifest = await tc.getManifestFromRepo('actions', 'node-versions', auth, 'main');
+        OfficialBuilds.cachedManifest.set(cacheKey, manifest);
+        return manifest;
     }
     resolveLtsAliasFromManifest(versionSpec, stable, manifest) {
         const alias = versionSpec.split('lts/')[1]?.toLowerCase();

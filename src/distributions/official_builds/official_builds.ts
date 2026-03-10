@@ -10,6 +10,17 @@ interface INodeRelease extends tc.IToolRelease {
 }
 
 export default class OfficialBuilds extends BaseDistribution {
+  // In-memory cache for the versions manifest to avoid redundant network requests
+  private static cachedManifest = new Map<string, tc.IToolRelease[]>();
+
+  /**
+   * Resets the in-memory cache of the versions manifest.
+   * Primarily used for testing purposes to ensure test isolation.
+   */
+  public static resetCache() {
+    OfficialBuilds.cachedManifest.clear();
+  }
+
   constructor(nodeInfo: NodeInputs) {
     super(nodeInfo);
   }
@@ -183,14 +194,31 @@ export default class OfficialBuilds extends BaseDistribution {
     return `${url}/dist`;
   }
 
-  private getManifest(): Promise<tc.IToolRelease[]> {
+  private async getManifest(): Promise<tc.IToolRelease[]> {
+    const auth = this.nodeInfo.mirror
+      ? this.nodeInfo.mirrorToken
+      : this.nodeInfo.auth;
+
+    // Use a key that includes auth info to ensure cache isolation if needed,
+    // though typically the manifest is the same.
+    const cacheKey = `manifest-${auth || 'no-auth'}`;
+
+    if (OfficialBuilds.cachedManifest.has(cacheKey)) {
+      core.debug('Using cached manifest from actions/node-versions@main');
+      return OfficialBuilds.cachedManifest.get(cacheKey)!;
+    }
+
     core.debug('Getting manifest from actions/node-versions@main');
-    return tc.getManifestFromRepo(
+    const manifest = await tc.getManifestFromRepo(
       'actions',
       'node-versions',
-      this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth,
+      auth,
       'main'
     );
+
+    OfficialBuilds.cachedManifest.set(cacheKey, manifest);
+
+    return manifest;
   }
 
   private resolveLtsAliasFromManifest(

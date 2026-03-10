@@ -16,6 +16,17 @@ export default abstract class BaseDistribution {
   protected httpClient: hc.HttpClient;
   protected osPlat = os.platform();
 
+  // In-memory cache for Node.js versions to avoid redundant network requests
+  private static cachedNodeJsVersions = new Map<string, INodeVersion[]>();
+
+  /**
+   * Resets the in-memory cache of Node.js versions.
+   * Primarily used for testing purposes to ensure test isolation.
+   */
+  public static resetCache() {
+    BaseDistribution.cachedNodeJsVersions.clear();
+  }
+
   constructor(protected nodeInfo: NodeInputs) {
     this.httpClient = new hc.HttpClient('setup-node', [], {
       allowRetries: true,
@@ -73,9 +84,9 @@ export default abstract class BaseDistribution {
     core.debug(`evaluating ${versions.length} versions`);
 
     for (const potential of versions) {
-      // semver.satisfies accepts a Range object as the second argument
-      // which is more efficient as it skips range parsing
-      const satisfied: boolean = semver.satisfies(potential, rangeObj, options);
+      // rangeObj.test(version) is more efficient than semver.satisfies(version, rangeObj)
+      // as it directly checks the version against the already parsed range.
+      const satisfied: boolean = rangeObj.test(potential);
       if (satisfied) {
         version = potential;
         break;
@@ -103,6 +114,12 @@ export default abstract class BaseDistribution {
     const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
     const dataUrl = `${initialUrl}/index.json`;
 
+    // Check cache before making a network request
+    if (BaseDistribution.cachedNodeJsVersions.has(dataUrl)) {
+      core.debug(`Using cached Node.js versions from ${dataUrl}`);
+      return BaseDistribution.cachedNodeJsVersions.get(dataUrl)!;
+    }
+
     const headers = {};
 
     if (this.nodeInfo.mirrorToken) {
@@ -113,7 +130,11 @@ export default abstract class BaseDistribution {
       dataUrl,
       headers
     );
-    return response.result || [];
+
+    const result = response.result || [];
+    BaseDistribution.cachedNodeJsVersions.set(dataUrl, result);
+
+    return result;
   }
 
   protected getNodejsDistInfo(version: string) {

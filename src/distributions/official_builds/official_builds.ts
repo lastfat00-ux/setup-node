@@ -10,6 +10,16 @@ interface INodeRelease extends tc.IToolRelease {
 }
 
 export default class OfficialBuilds extends BaseDistribution {
+  // Class-level cache for the tool manifest to avoid redundant network requests.
+  // This is particularly useful when resolving LTS aliases and checking for
+  // latest versions within the same action step execution.
+  private static manifestPromise: Promise<tc.IToolRelease[]> | undefined;
+
+  public static resetCache() {
+    BaseDistribution.resetCache();
+    OfficialBuilds.manifestPromise = undefined;
+  }
+
   constructor(nodeInfo: NodeInputs) {
     super(nodeInfo);
   }
@@ -184,13 +194,19 @@ export default class OfficialBuilds extends BaseDistribution {
   }
 
   private getManifest(): Promise<tc.IToolRelease[]> {
+    if (OfficialBuilds.manifestPromise) {
+      return OfficialBuilds.manifestPromise;
+    }
+
     core.debug('Getting manifest from actions/node-versions@main');
-    return tc.getManifestFromRepo(
+    OfficialBuilds.manifestPromise = tc.getManifestFromRepo(
       'actions',
       'node-versions',
       this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth,
       'main'
     );
+
+    return OfficialBuilds.manifestPromise;
   }
 
   private resolveLtsAliasFromManifest(

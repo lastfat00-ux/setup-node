@@ -13,8 +13,14 @@ import fs from 'fs';
 import {NodeInputs, INodeVersion, INodeVersionInfo} from './base-models';
 
 export default abstract class BaseDistribution {
+  private static nodeJsVersionsCache: {[key: string]: INodeVersion[]} = {};
+
   protected httpClient: hc.HttpClient;
   protected osPlat = os.platform();
+
+  public static resetCache() {
+    BaseDistribution.nodeJsVersionsCache = {};
+  }
 
   constructor(protected nodeInfo: NodeInputs) {
     this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -103,6 +109,10 @@ export default abstract class BaseDistribution {
     const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
     const dataUrl = `${initialUrl}/index.json`;
 
+    if (BaseDistribution.nodeJsVersionsCache[dataUrl]) {
+      return BaseDistribution.nodeJsVersionsCache[dataUrl];
+    }
+
     const headers = {};
 
     if (this.nodeInfo.mirrorToken) {
@@ -113,7 +123,11 @@ export default abstract class BaseDistribution {
       dataUrl,
       headers
     );
-    return response.result || [];
+
+    const result = response.result || [];
+    BaseDistribution.nodeJsVersionsCache[dataUrl] = result;
+
+    return result;
   }
 
   protected getNodejsDistInfo(version: string) {

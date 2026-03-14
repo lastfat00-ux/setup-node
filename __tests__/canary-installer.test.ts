@@ -10,6 +10,7 @@ import osm from 'os';
 import path from 'path';
 import * as main from '../src/main';
 import * as auth from '../src/authutil';
+import OfficialBuilds from '../src/distributions/official_builds/official_builds';
 import {INodeVersion} from '../src/distributions/base-models';
 
 import nodeTestManifest from './data/versions-manifest.json';
@@ -48,6 +49,7 @@ describe('setup-node', () => {
   let getJsonSpy: jest.SpyInstance;
 
   beforeEach(() => {
+    OfficialBuilds.resetCache();
     // @actions/core
     console.log('::stop-commands::stoptoken'); // Disable executing of runner commands when running tests in actions
     process.env['GITHUB_PATH'] = ''; // Stub out ENV file functionality so we can verify it writes to standard out

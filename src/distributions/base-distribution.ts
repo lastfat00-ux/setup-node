@@ -15,6 +15,14 @@ import {NodeInputs, INodeVersion, INodeVersionInfo} from './base-models';
 export default abstract class BaseDistribution {
   protected httpClient: hc.HttpClient;
   protected osPlat = os.platform();
+  private static nodeJsVersionsCache = new Map<
+    string,
+    Promise<INodeVersion[]>
+  >();
+
+  public static resetCache() {
+    BaseDistribution.nodeJsVersionsCache.clear();
+  }
 
   constructor(protected nodeInfo: NodeInputs) {
     this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -73,9 +81,8 @@ export default abstract class BaseDistribution {
     core.debug(`evaluating ${versions.length} versions`);
 
     for (const potential of versions) {
-      // semver.satisfies accepts a Range object as the second argument
-      // which is more efficient as it skips range parsing
-      const satisfied: boolean = semver.satisfies(potential, rangeObj, options);
+      // rangeObj.test(potential) is faster than semver.satisfies(potential, rangeObj)
+      const satisfied: boolean = rangeObj.test(potential);
       if (satisfied) {
         version = potential;
         break;
@@ -103,17 +110,27 @@ export default abstract class BaseDistribution {
     const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
     const dataUrl = `${initialUrl}/index.json`;
 
+    if (BaseDistribution.nodeJsVersionsCache.has(dataUrl)) {
+      return BaseDistribution.nodeJsVersionsCache.get(dataUrl)!;
+    }
+
     const headers = {};
 
     if (this.nodeInfo.mirrorToken) {
       headers['Authorization'] = this.nodeInfo.mirrorToken;
     }
 
-    const response = await this.httpClient.getJson<INodeVersion[]>(
-      dataUrl,
-      headers
-    );
-    return response.result || [];
+    const versionsPromise = (async () => {
+      const response = await this.httpClient.getJson<INodeVersion[]>(
+        dataUrl,
+        headers
+      );
+      return response.result || [];
+    })();
+
+    BaseDistribution.nodeJsVersionsCache.set(dataUrl, versionsPromise);
+
+    return versionsPromise;
   }
 
   protected getNodejsDistInfo(version: string) {

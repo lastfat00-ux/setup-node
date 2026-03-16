@@ -81652,6 +81652,15 @@ class BaseDistribution {
     nodeInfo;
     httpClient;
     osPlat = os_1.default.platform();
+    // Static cache for Node.js versions metadata to avoid redundant network requests
+    static nodeJsVersionsCache = new Map();
+    /**
+     * Resets the static cache for Node.js versions metadata.
+     * Useful for unit tests to ensure isolation.
+     */
+    static resetCache() {
+        BaseDistribution.nodeJsVersionsCache.clear();
+    }
     constructor(nodeInfo) {
         this.nodeInfo = nodeInfo;
         this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -81693,9 +81702,13 @@ class BaseDistribution {
     evaluateVersions(versions) {
         let version = '';
         const { range, options } = this.validRange(this.nodeInfo.versionSpec);
+        // Pre-parse the range to avoid redundant parsing in the loop
+        const rangeObj = new semver_1.default.Range(range, options);
         core.debug(`evaluating ${versions.length} versions`);
         for (const potential of versions) {
-            const satisfied = semver_1.default.satisfies(potential, range, options);
+            // semver.satisfies accepts a Range object as the second argument
+            // which is more efficient as it skips range parsing
+            const satisfied = semver_1.default.satisfies(potential, rangeObj, options);
             if (satisfied) {
                 version = potential;
                 break;
@@ -81715,12 +81728,22 @@ class BaseDistribution {
     async getNodeJsVersions() {
         const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
         const dataUrl = `${initialUrl}/index.json`;
+        // Check if the versions are already being fetched or have been fetched
+        const cachedPromise = BaseDistribution.nodeJsVersionsCache.get(dataUrl);
+        if (cachedPromise) {
+            return cachedPromise;
+        }
         const headers = {};
         if (this.nodeInfo.mirrorToken) {
             headers['Authorization'] = this.nodeInfo.mirrorToken;
         }
-        const response = await this.httpClient.getJson(dataUrl, headers);
-        return response.result || [];
+        // Use an async IIFE to ensure we're caching the Promise
+        const versionsPromise = (async () => {
+            const response = await this.httpClient.getJson(dataUrl, headers);
+            return response.result || [];
+        })();
+        BaseDistribution.nodeJsVersionsCache.set(dataUrl, versionsPromise);
+        return versionsPromise;
     }
     getNodejsDistInfo(version) {
         const osArch = this.translateArchToDistUrl(this.nodeInfo.arch);
@@ -82008,6 +82031,15 @@ const tc = __importStar(__nccwpck_require__(33472));
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const base_distribution_1 = __importDefault(__nccwpck_require__(60709));
 class OfficialBuilds extends base_distribution_1.default {
+    static manifestPromise;
+    /**
+     * Resets the static cache for the versions manifest and calls parent cache reset.
+     * Useful for unit tests to ensure isolation.
+     */
+    static resetCache() {
+        OfficialBuilds.manifestPromise = undefined;
+        base_distribution_1.default.resetCache();
+    }
     constructor(nodeInfo) {
         super(nodeInfo);
     }
@@ -82120,8 +82152,12 @@ class OfficialBuilds extends base_distribution_1.default {
         return `${url}/dist`;
     }
     getManifest() {
+        if (OfficialBuilds.manifestPromise) {
+            return OfficialBuilds.manifestPromise;
+        }
         core.debug('Getting manifest from actions/node-versions@main');
-        return tc.getManifestFromRepo('actions', 'node-versions', this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth, 'main');
+        OfficialBuilds.manifestPromise = tc.getManifestFromRepo('actions', 'node-versions', this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth, 'main');
+        return OfficialBuilds.manifestPromise;
     }
     resolveLtsAliasFromManifest(versionSpec, stable, manifest) {
         const alias = versionSpec.split('lts/')[1]?.toLowerCase();

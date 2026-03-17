@@ -11,6 +11,7 @@ import path from 'path';
 import * as main from '../src/main';
 import * as auth from '../src/authutil';
 import {INodeVersion} from '../src/distributions/base-models';
+import BaseDistribution from '../src/distributions/base-distribution';
 
 import nodeTestDist from './data/node-dist-index.json';
 import nodeTestDistNightly from './data/node-nightly-index.json';
@@ -43,6 +44,7 @@ describe('setup-node', () => {
   let getJsonSpy: jest.SpyInstance;
 
   beforeEach(() => {
+    BaseDistribution.resetCache();
     // @actions/core
     console.log('::stop-commands::stoptoken'); // Disable executing of runner commands when running tests in actions
     process.env['GITHUB_PATH'] = ''; // Stub out ENV file functionality so we can verify it writes to standard out

@@ -16,6 +16,17 @@ export default abstract class BaseDistribution {
   protected httpClient: hc.HttpClient;
   protected osPlat = os.platform();
 
+  // Static cache for Node.js versions to avoid redundant network requests
+  // keyed by the distribution URL
+  private static nodeJsVersionsCache: Map<
+    string,
+    Promise<INodeVersion[]>
+  > = new Map();
+
+  public static resetCache() {
+    BaseDistribution.nodeJsVersionsCache.clear();
+  }
+
   constructor(protected nodeInfo: NodeInputs) {
     this.httpClient = new hc.HttpClient('setup-node', [], {
       allowRetries: true,
@@ -74,8 +85,10 @@ export default abstract class BaseDistribution {
 
     for (const potential of versions) {
       // semver.satisfies accepts a Range object as the second argument
-      // which is more efficient as it skips range parsing
-      const satisfied: boolean = semver.satisfies(potential, rangeObj, options);
+      // which is more efficient as it skips range parsing.
+      // Bolt: rangeObj.test() is even more efficient as it skips internal wrapper logic
+      // and directly tests the version against the already parsed range.
+      const satisfied: boolean = rangeObj.test(potential);
       if (satisfied) {
         version = potential;
         break;
@@ -103,17 +116,30 @@ export default abstract class BaseDistribution {
     const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
     const dataUrl = `${initialUrl}/index.json`;
 
+    // Check if the promise for this URL is already in the cache
+    let versionPromise = BaseDistribution.nodeJsVersionsCache.get(dataUrl);
+    if (versionPromise) {
+      core.debug(`Reusing cached promise for ${dataUrl}`);
+      return versionPromise;
+    }
+
     const headers = {};
 
     if (this.nodeInfo.mirrorToken) {
       headers['Authorization'] = this.nodeInfo.mirrorToken;
     }
 
-    const response = await this.httpClient.getJson<INodeVersion[]>(
-      dataUrl,
-      headers
-    );
-    return response.result || [];
+    versionPromise = (async () => {
+      const response = await this.httpClient.getJson<INodeVersion[]>(
+        dataUrl,
+        headers
+      );
+      return response.result || [];
+    })();
+
+    // Store the promise in the cache to avoid redundant requests
+    BaseDistribution.nodeJsVersionsCache.set(dataUrl, versionPromise);
+    return versionPromise;
   }
 
   protected getNodejsDistInfo(version: string) {

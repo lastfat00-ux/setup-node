@@ -16,6 +16,20 @@ export default abstract class BaseDistribution {
   protected httpClient: hc.HttpClient;
   protected osPlat = os.platform();
 
+  // Cache Node.js versions to avoid redundant network requests in a single execution
+  private static nodeJsVersionsCache = new Map<
+    string,
+    Promise<INodeVersion[]>
+  >();
+
+  /**
+   * Resets the version cache. This is primarily used in unit tests to ensure
+   * execution isolation.
+   */
+  public static resetCache() {
+    BaseDistribution.nodeJsVersionsCache.clear();
+  }
+
   constructor(protected nodeInfo: NodeInputs) {
     this.httpClient = new hc.HttpClient('setup-node', [], {
       allowRetries: true,
@@ -103,17 +117,30 @@ export default abstract class BaseDistribution {
     const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
     const dataUrl = `${initialUrl}/index.json`;
 
+    // Check if we have a cached promise for this URL
+    if (BaseDistribution.nodeJsVersionsCache.has(dataUrl)) {
+      core.debug(`Using cached Node.js versions for ${dataUrl}`);
+      return BaseDistribution.nodeJsVersionsCache.get(dataUrl)!;
+    }
+
     const headers = {};
 
     if (this.nodeInfo.mirrorToken) {
       headers['Authorization'] = this.nodeInfo.mirrorToken;
     }
 
-    const response = await this.httpClient.getJson<INodeVersion[]>(
-      dataUrl,
-      headers
-    );
-    return response.result || [];
+    // Cache the promise to handle concurrent calls and avoid redundant requests
+    const versionsPromise = (async () => {
+      const response = await this.httpClient.getJson<INodeVersion[]>(
+        dataUrl,
+        headers
+      );
+      return response.result || [];
+    })();
+
+    BaseDistribution.nodeJsVersionsCache.set(dataUrl, versionsPromise);
+
+    return versionsPromise;
   }
 
   protected getNodejsDistInfo(version: string) {

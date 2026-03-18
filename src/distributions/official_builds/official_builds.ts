@@ -10,6 +10,18 @@ interface INodeRelease extends tc.IToolRelease {
 }
 
 export default class OfficialBuilds extends BaseDistribution {
+  // Cache the manifest promise to avoid redundant network requests in a single execution
+  private static manifestPromise: Promise<tc.IToolRelease[]> | null = null;
+
+  /**
+   * Resets the manifest and version cache. This is primarily used in unit tests
+   * to ensure execution isolation.
+   */
+  public static resetCache() {
+    OfficialBuilds.manifestPromise = null;
+    BaseDistribution.resetCache();
+  }
+
   constructor(nodeInfo: NodeInputs) {
     super(nodeInfo);
   }
@@ -184,13 +196,20 @@ export default class OfficialBuilds extends BaseDistribution {
   }
 
   private getManifest(): Promise<tc.IToolRelease[]> {
+    if (OfficialBuilds.manifestPromise) {
+      core.debug('Using cached manifest from actions/node-versions@main');
+      return OfficialBuilds.manifestPromise;
+    }
+
     core.debug('Getting manifest from actions/node-versions@main');
-    return tc.getManifestFromRepo(
+    OfficialBuilds.manifestPromise = tc.getManifestFromRepo(
       'actions',
       'node-versions',
       this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth,
       'main'
     );
+
+    return OfficialBuilds.manifestPromise;
   }
 
   private resolveLtsAliasFromManifest(

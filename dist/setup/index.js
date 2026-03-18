@@ -81652,6 +81652,15 @@ class BaseDistribution {
     nodeInfo;
     httpClient;
     osPlat = os_1.default.platform();
+    // Cache Node.js versions to avoid redundant network requests in a single execution
+    static nodeJsVersionsCache = new Map();
+    /**
+     * Resets the version cache. This is primarily used in unit tests to ensure
+     * execution isolation.
+     */
+    static resetCache() {
+        BaseDistribution.nodeJsVersionsCache.clear();
+    }
     constructor(nodeInfo) {
         this.nodeInfo = nodeInfo;
         this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -81693,9 +81702,13 @@ class BaseDistribution {
     evaluateVersions(versions) {
         let version = '';
         const { range, options } = this.validRange(this.nodeInfo.versionSpec);
+        // Pre-parse the range to avoid redundant parsing in the loop
+        const rangeObj = new semver_1.default.Range(range, options);
         core.debug(`evaluating ${versions.length} versions`);
         for (const potential of versions) {
-            const satisfied = semver_1.default.satisfies(potential, range, options);
+            // semver.satisfies accepts a Range object as the second argument
+            // which is more efficient as it skips range parsing
+            const satisfied = semver_1.default.satisfies(potential, rangeObj, options);
             if (satisfied) {
                 version = potential;
                 break;
@@ -81715,12 +81728,22 @@ class BaseDistribution {
     async getNodeJsVersions() {
         const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
         const dataUrl = `${initialUrl}/index.json`;
+        // Check if we have a cached promise for this URL
+        if (BaseDistribution.nodeJsVersionsCache.has(dataUrl)) {
+            core.debug(`Using cached Node.js versions for ${dataUrl}`);
+            return BaseDistribution.nodeJsVersionsCache.get(dataUrl);
+        }
         const headers = {};
         if (this.nodeInfo.mirrorToken) {
             headers['Authorization'] = this.nodeInfo.mirrorToken;
         }
-        const response = await this.httpClient.getJson(dataUrl, headers);
-        return response.result || [];
+        // Cache the promise to handle concurrent calls and avoid redundant requests
+        const versionsPromise = (async () => {
+            const response = await this.httpClient.getJson(dataUrl, headers);
+            return response.result || [];
+        })();
+        BaseDistribution.nodeJsVersionsCache.set(dataUrl, versionsPromise);
+        return versionsPromise;
     }
     getNodejsDistInfo(version) {
         const osArch = this.translateArchToDistUrl(this.nodeInfo.arch);
@@ -82008,6 +82031,16 @@ const tc = __importStar(__nccwpck_require__(33472));
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const base_distribution_1 = __importDefault(__nccwpck_require__(60709));
 class OfficialBuilds extends base_distribution_1.default {
+    // Cache the manifest promise to avoid redundant network requests in a single execution
+    static manifestPromise = null;
+    /**
+     * Resets the manifest and version cache. This is primarily used in unit tests
+     * to ensure execution isolation.
+     */
+    static resetCache() {
+        OfficialBuilds.manifestPromise = null;
+        base_distribution_1.default.resetCache();
+    }
     constructor(nodeInfo) {
         super(nodeInfo);
     }
@@ -82120,8 +82153,13 @@ class OfficialBuilds extends base_distribution_1.default {
         return `${url}/dist`;
     }
     getManifest() {
+        if (OfficialBuilds.manifestPromise) {
+            core.debug('Using cached manifest from actions/node-versions@main');
+            return OfficialBuilds.manifestPromise;
+        }
         core.debug('Getting manifest from actions/node-versions@main');
-        return tc.getManifestFromRepo('actions', 'node-versions', this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth, 'main');
+        OfficialBuilds.manifestPromise = tc.getManifestFromRepo('actions', 'node-versions', this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth, 'main');
+        return OfficialBuilds.manifestPromise;
     }
     resolveLtsAliasFromManifest(versionSpec, stable, manifest) {
         const alias = versionSpec.split('lts/')[1]?.toLowerCase();

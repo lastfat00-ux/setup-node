@@ -15,6 +15,9 @@ import {NodeInputs, INodeVersion, INodeVersionInfo} from './base-models';
 export default abstract class BaseDistribution {
   protected httpClient: hc.HttpClient;
   protected osPlat = os.platform();
+  // Cache for Node.js versions to avoid redundant network requests in a single execution flow.
+  private static nodeJsVersionsCache: Map<string, Promise<INodeVersion[]>> =
+    new Map();
 
   constructor(protected nodeInfo: NodeInputs) {
     this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -103,17 +106,35 @@ export default abstract class BaseDistribution {
     const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
     const dataUrl = `${initialUrl}/index.json`;
 
+    if (BaseDistribution.nodeJsVersionsCache.has(dataUrl)) {
+      return BaseDistribution.nodeJsVersionsCache.get(dataUrl)!;
+    }
+
     const headers = {};
 
     if (this.nodeInfo.mirrorToken) {
       headers['Authorization'] = this.nodeInfo.mirrorToken;
     }
 
-    const response = await this.httpClient.getJson<INodeVersion[]>(
-      dataUrl,
-      headers
-    );
-    return response.result || [];
+    const versionsPromise = (async () => {
+      const response = await this.httpClient.getJson<INodeVersion[]>(
+        dataUrl,
+        headers
+      );
+      return response.result || [];
+    })();
+
+    BaseDistribution.nodeJsVersionsCache.set(dataUrl, versionsPromise);
+
+    return versionsPromise;
+  }
+
+  /**
+   * Resets the Node.js versions cache.
+   * Useful for unit tests to ensure isolation between test runs.
+   */
+  public static resetCache() {
+    BaseDistribution.nodeJsVersionsCache.clear();
   }
 
   protected getNodejsDistInfo(version: string) {

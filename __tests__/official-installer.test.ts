@@ -130,6 +130,8 @@ describe('setup-node', () => {
     // @actions/exec
     getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
     getExecOutputSpy.mockImplementation(() => 'v16.15.0');
+
+    OfficialBuilds.resetCache();
   });
 
   afterEach(() => {

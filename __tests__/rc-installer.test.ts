@@ -10,6 +10,7 @@ import osm from 'os';
 import path from 'path';
 import * as main from '../src/main';
 import * as auth from '../src/authutil';
+import RcBuild from '../src/distributions/rc/rc_builds';
 import {INodeVersion} from '../src/distributions/base-models';
 
 import nodeTestDist from './data/node-dist-index.json';
@@ -121,6 +122,8 @@ describe('setup-node', () => {
     // @actions/exec
     getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
     getExecOutputSpy.mockImplementation(() => 'v16.15.0-rc.1');
+
+    RcBuild.resetCache();
   });
 
   afterEach(() => {

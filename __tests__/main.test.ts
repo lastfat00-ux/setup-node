@@ -79,6 +79,8 @@ describe('main tests', () => {
 
     setupNodeJsSpy = jest.spyOn(OfficialBuilds.prototype, 'setupNodeJs');
     setupNodeJsSpy.mockImplementation(() => {});
+
+    OfficialBuilds.resetCache();
   });
 
   afterEach(() => {

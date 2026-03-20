@@ -10,6 +10,7 @@ import osm from 'os';
 import path from 'path';
 import * as main from '../src/main';
 import * as auth from '../src/authutil';
+import CanaryBuild from '../src/distributions/v8-canary/canary_builds';
 import {INodeVersion} from '../src/distributions/base-models';
 
 import nodeTestManifest from './data/versions-manifest.json';
@@ -132,6 +133,8 @@ describe('setup-node', () => {
     // @actions/exec
     getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
     getExecOutputSpy.mockImplementation(() => 'v16.15.0');
+
+    CanaryBuild.resetCache();
   });
 
   afterEach(() => {

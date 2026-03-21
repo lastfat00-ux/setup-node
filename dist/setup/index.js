@@ -81652,6 +81652,17 @@ class BaseDistribution {
     nodeInfo;
     httpClient;
     osPlat = os_1.default.platform();
+    /**
+     * Static cache to store the Promise of Node.js versions for each mirror.
+     * This prevents redundant network requests for index.json during a single action run.
+     */
+    static nodeJsVersionsCache = new Map();
+    /**
+     * Resets the Node.js versions cache. Should be used for testing purposes.
+     */
+    static resetCache() {
+        BaseDistribution.nodeJsVersionsCache.clear();
+    }
     constructor(nodeInfo) {
         this.nodeInfo = nodeInfo;
         this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -81693,9 +81704,13 @@ class BaseDistribution {
     evaluateVersions(versions) {
         let version = '';
         const { range, options } = this.validRange(this.nodeInfo.versionSpec);
+        // Pre-parse the range to avoid redundant parsing in the loop
+        const rangeObj = new semver_1.default.Range(range, options);
         core.debug(`evaluating ${versions.length} versions`);
         for (const potential of versions) {
-            const satisfied = semver_1.default.satisfies(potential, range, options);
+            // semver.satisfies accepts a Range object as the second argument
+            // which is more efficient as it skips range parsing
+            const satisfied = semver_1.default.satisfies(potential, rangeObj, options);
             if (satisfied) {
                 version = potential;
                 break;
@@ -81715,12 +81730,23 @@ class BaseDistribution {
     async getNodeJsVersions() {
         const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
         const dataUrl = `${initialUrl}/index.json`;
+        // Composite cache key includes the data URL and any mirror token to ensure isolation.
+        const cacheKey = `${dataUrl}:${this.nodeInfo.mirrorToken || ''}`;
+        if (BaseDistribution.nodeJsVersionsCache.has(cacheKey)) {
+            core.debug(`Cache hit for ${dataUrl}`);
+            return BaseDistribution.nodeJsVersionsCache.get(cacheKey);
+        }
         const headers = {};
         if (this.nodeInfo.mirrorToken) {
             headers['Authorization'] = this.nodeInfo.mirrorToken;
         }
-        const response = await this.httpClient.getJson(dataUrl, headers);
-        return response.result || [];
+        // Cache the Promise itself to prevent "thundering herd" if multiple setupNodeJs calls occur concurrently.
+        const versionsPromise = (async () => {
+            const response = await this.httpClient.getJson(dataUrl, headers);
+            return response.result || [];
+        })();
+        BaseDistribution.nodeJsVersionsCache.set(cacheKey, versionsPromise);
+        return versionsPromise;
     }
     getNodejsDistInfo(version) {
         const osArch = this.translateArchToDistUrl(this.nodeInfo.arch);
@@ -82008,6 +82034,18 @@ const tc = __importStar(__nccwpck_require__(33472));
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const base_distribution_1 = __importDefault(__nccwpck_require__(60709));
 class OfficialBuilds extends base_distribution_1.default {
+    /**
+     * Static cache for repository manifest Promises, keyed by authentication token.
+     * Prevents redundant manifest fetches within a single execution flow.
+     */
+    static manifestPromise = new Map();
+    /**
+     * Resets the manifest cache and the parent's Node.js versions cache.
+     */
+    static resetCache() {
+        OfficialBuilds.manifestPromise.clear();
+        base_distribution_1.default.resetCache();
+    }
     constructor(nodeInfo) {
         super(nodeInfo);
     }
@@ -82120,8 +82158,20 @@ class OfficialBuilds extends base_distribution_1.default {
         return `${url}/dist`;
     }
     getManifest() {
+        const auth = this.nodeInfo.mirror
+            ? this.nodeInfo.mirrorToken
+            : this.nodeInfo.auth;
+        // Manifest cache is isolation based on authentication to prevent unauthorized or leaked access.
+        const cacheKey = auth || '';
+        if (OfficialBuilds.manifestPromise.has(cacheKey)) {
+            core.debug('Cache hit for manifest');
+            return OfficialBuilds.manifestPromise.get(cacheKey);
+        }
         core.debug('Getting manifest from actions/node-versions@main');
-        return tc.getManifestFromRepo('actions', 'node-versions', this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth, 'main');
+        // Store the Promise to avoid concurrent network requests for the same manifest.
+        const manifestPromise = tc.getManifestFromRepo('actions', 'node-versions', auth, 'main');
+        OfficialBuilds.manifestPromise.set(cacheKey, manifestPromise);
+        return manifestPromise;
     }
     resolveLtsAliasFromManifest(versionSpec, stable, manifest) {
         const alias = versionSpec.split('lts/')[1]?.toLowerCase();

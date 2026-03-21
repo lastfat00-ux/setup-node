@@ -15,6 +15,21 @@ import {NodeInputs, INodeVersion, INodeVersionInfo} from './base-models';
 export default abstract class BaseDistribution {
   protected httpClient: hc.HttpClient;
   protected osPlat = os.platform();
+  /**
+   * Static cache to store the Promise of Node.js versions for each mirror.
+   * This prevents redundant network requests for index.json during a single action run.
+   */
+  private static nodeJsVersionsCache = new Map<
+    string,
+    Promise<INodeVersion[]>
+  >();
+
+  /**
+   * Resets the Node.js versions cache. Should be used for testing purposes.
+   */
+  public static resetCache() {
+    BaseDistribution.nodeJsVersionsCache.clear();
+  }
 
   constructor(protected nodeInfo: NodeInputs) {
     this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -102,6 +117,13 @@ export default abstract class BaseDistribution {
   protected async getNodeJsVersions(): Promise<INodeVersion[]> {
     const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
     const dataUrl = `${initialUrl}/index.json`;
+    // Composite cache key includes the data URL and any mirror token to ensure isolation.
+    const cacheKey = `${dataUrl}:${this.nodeInfo.mirrorToken || ''}`;
+
+    if (BaseDistribution.nodeJsVersionsCache.has(cacheKey)) {
+      core.debug(`Cache hit for ${dataUrl}`);
+      return BaseDistribution.nodeJsVersionsCache.get(cacheKey)!;
+    }
 
     const headers = {};
 
@@ -109,11 +131,18 @@ export default abstract class BaseDistribution {
       headers['Authorization'] = this.nodeInfo.mirrorToken;
     }
 
-    const response = await this.httpClient.getJson<INodeVersion[]>(
-      dataUrl,
-      headers
-    );
-    return response.result || [];
+    // Cache the Promise itself to prevent "thundering herd" if multiple setupNodeJs calls occur concurrently.
+    const versionsPromise = (async () => {
+      const response = await this.httpClient.getJson<INodeVersion[]>(
+        dataUrl,
+        headers
+      );
+      return response.result || [];
+    })();
+
+    BaseDistribution.nodeJsVersionsCache.set(cacheKey, versionsPromise);
+
+    return versionsPromise;
   }
 
   protected getNodejsDistInfo(version: string) {

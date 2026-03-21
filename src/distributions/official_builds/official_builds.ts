@@ -10,6 +10,23 @@ interface INodeRelease extends tc.IToolRelease {
 }
 
 export default class OfficialBuilds extends BaseDistribution {
+  /**
+   * Static cache for repository manifest Promises, keyed by authentication token.
+   * Prevents redundant manifest fetches within a single execution flow.
+   */
+  private static manifestPromise = new Map<
+    string,
+    Promise<tc.IToolRelease[]>
+  >();
+
+  /**
+   * Resets the manifest cache and the parent's Node.js versions cache.
+   */
+  public static resetCache() {
+    OfficialBuilds.manifestPromise.clear();
+    BaseDistribution.resetCache();
+  }
+
   constructor(nodeInfo: NodeInputs) {
     super(nodeInfo);
   }
@@ -184,13 +201,29 @@ export default class OfficialBuilds extends BaseDistribution {
   }
 
   private getManifest(): Promise<tc.IToolRelease[]> {
+    const auth = this.nodeInfo.mirror
+      ? this.nodeInfo.mirrorToken
+      : this.nodeInfo.auth;
+    // Manifest cache is isolation based on authentication to prevent unauthorized or leaked access.
+    const cacheKey = auth || '';
+
+    if (OfficialBuilds.manifestPromise.has(cacheKey)) {
+      core.debug('Cache hit for manifest');
+      return OfficialBuilds.manifestPromise.get(cacheKey)!;
+    }
+
     core.debug('Getting manifest from actions/node-versions@main');
-    return tc.getManifestFromRepo(
+    // Store the Promise to avoid concurrent network requests for the same manifest.
+    const manifestPromise = tc.getManifestFromRepo(
       'actions',
       'node-versions',
-      this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth,
+      auth,
       'main'
     );
+
+    OfficialBuilds.manifestPromise.set(cacheKey, manifestPromise);
+
+    return manifestPromise;
   }
 
   private resolveLtsAliasFromManifest(

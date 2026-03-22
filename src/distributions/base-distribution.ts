@@ -16,6 +16,13 @@ export default abstract class BaseDistribution {
   protected httpClient: hc.HttpClient;
   protected osPlat = os.platform();
 
+  private static nodeJsVersionsCache: Map<string, Promise<INodeVersion[]>> =
+    new Map();
+
+  public static resetCache() {
+    BaseDistribution.nodeJsVersionsCache.clear();
+  }
+
   constructor(protected nodeInfo: NodeInputs) {
     this.httpClient = new hc.HttpClient('setup-node', [], {
       allowRetries: true,
@@ -103,17 +110,31 @@ export default abstract class BaseDistribution {
     const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
     const dataUrl = `${initialUrl}/index.json`;
 
+    const cacheKey = `${dataUrl}:${this.nodeInfo.mirrorToken || ''}`;
+
+    if (BaseDistribution.nodeJsVersionsCache.has(cacheKey)) {
+      core.debug(`Using cached Node.js versions for ${dataUrl}`);
+      return BaseDistribution.nodeJsVersionsCache.get(cacheKey)!;
+    }
+
     const headers = {};
 
     if (this.nodeInfo.mirrorToken) {
       headers['Authorization'] = this.nodeInfo.mirrorToken;
     }
 
-    const response = await this.httpClient.getJson<INodeVersion[]>(
-      dataUrl,
-      headers
-    );
-    return response.result || [];
+    // Wrap the request in an async IIFE to ensure we're caching the Promise
+    const versionsPromise = (async () => {
+      const response = await this.httpClient.getJson<INodeVersion[]>(
+        dataUrl,
+        headers
+      );
+      return response.result || [];
+    })();
+
+    BaseDistribution.nodeJsVersionsCache.set(cacheKey, versionsPromise);
+
+    return versionsPromise;
   }
 
   protected getNodejsDistInfo(version: string) {

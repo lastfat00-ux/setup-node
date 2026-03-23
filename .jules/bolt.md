@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Cleanup after Install]
 **Learning:** Running `pnpm install` can create a lockfile (like `pnpm-lock.yaml`) if it doesn't exist, which should not be committed unless requested.
 **Action:** Always check for and remove any auto-generated lockfiles or temporary scripts before submission.
+
+## 2025-05-15 - [Caching Remote Metadata]
+**Learning:** Redundant network requests for `index.json` and manifests occur multiple times within a single action step during version resolution and fallback. Static class-level caching of Promises prevents this.
+**Action:** Use `Map<string, Promise<T>>` for static caches to handle concurrent requests and implement `resetCache()` for test isolation.

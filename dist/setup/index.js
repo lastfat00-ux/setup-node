@@ -81652,6 +81652,10 @@ class BaseDistribution {
     nodeInfo;
     httpClient;
     osPlat = os_1.default.platform();
+    static nodeJsVersionsCache = new Map();
+    static resetCache() {
+        this.nodeJsVersionsCache.clear();
+    }
     constructor(nodeInfo) {
         this.nodeInfo = nodeInfo;
         this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -81693,9 +81697,13 @@ class BaseDistribution {
     evaluateVersions(versions) {
         let version = '';
         const { range, options } = this.validRange(this.nodeInfo.versionSpec);
+        // Pre-parse the range to avoid redundant parsing in the loop
+        const rangeObj = new semver_1.default.Range(range, options);
         core.debug(`evaluating ${versions.length} versions`);
         for (const potential of versions) {
-            const satisfied = semver_1.default.satisfies(potential, range, options);
+            // semver.satisfies accepts a Range object as the second argument
+            // which is more efficient as it skips range parsing
+            const satisfied = semver_1.default.satisfies(potential, rangeObj, options);
             if (satisfied) {
                 version = potential;
                 break;
@@ -81715,11 +81723,21 @@ class BaseDistribution {
     async getNodeJsVersions() {
         const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
         const dataUrl = `${initialUrl}/index.json`;
+        const cacheKey = `${dataUrl}:${this.nodeInfo.mirrorToken || ''}`;
+        if (BaseDistribution.nodeJsVersionsCache.has(cacheKey)) {
+            core.debug(`Reusing cached Node.js versions for ${dataUrl}`);
+            const response = await BaseDistribution.nodeJsVersionsCache.get(cacheKey);
+            return response.result || [];
+        }
         const headers = {};
         if (this.nodeInfo.mirrorToken) {
             headers['Authorization'] = this.nodeInfo.mirrorToken;
         }
-        const response = await this.httpClient.getJson(dataUrl, headers);
+        // Store the promise in the cache BEFORE awaiting it
+        // This allows concurrent calls to reuse the same pending request
+        const responsePromise = this.httpClient.getJson(dataUrl, headers);
+        BaseDistribution.nodeJsVersionsCache.set(cacheKey, responsePromise);
+        const response = await responsePromise;
         return response.result || [];
     }
     getNodejsDistInfo(version) {
@@ -82008,6 +82026,11 @@ const tc = __importStar(__nccwpck_require__(33472));
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const base_distribution_1 = __importDefault(__nccwpck_require__(60709));
 class OfficialBuilds extends base_distribution_1.default {
+    static manifestCache = new Map();
+    static resetCache() {
+        base_distribution_1.default.resetCache();
+        this.manifestCache.clear();
+    }
     constructor(nodeInfo) {
         super(nodeInfo);
     }
@@ -82120,8 +82143,18 @@ class OfficialBuilds extends base_distribution_1.default {
         return `${url}/dist`;
     }
     getManifest() {
+        const auth = this.nodeInfo.mirror
+            ? this.nodeInfo.mirrorToken
+            : this.nodeInfo.auth;
+        const cacheKey = auth || '';
+        if (OfficialBuilds.manifestCache.has(cacheKey)) {
+            core.debug('Reusing cached manifest from actions/node-versions@main');
+            return OfficialBuilds.manifestCache.get(cacheKey);
+        }
         core.debug('Getting manifest from actions/node-versions@main');
-        return tc.getManifestFromRepo('actions', 'node-versions', this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth, 'main');
+        const manifestPromise = tc.getManifestFromRepo('actions', 'node-versions', auth, 'main');
+        OfficialBuilds.manifestCache.set(cacheKey, manifestPromise);
+        return manifestPromise;
     }
     resolveLtsAliasFromManifest(versionSpec, stable, manifest) {
         const alias = versionSpec.split('lts/')[1]?.toLowerCase();

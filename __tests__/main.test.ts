@@ -13,6 +13,7 @@ import each from 'jest-each';
 import * as main from '../src/main';
 import * as util from '../src/util';
 import OfficialBuilds from '../src/distributions/official_builds/official_builds';
+import BaseDistribution from '../src/distributions/base-distribution';
 
 describe('main tests', () => {
   let inputs = {} as any;
@@ -40,6 +41,7 @@ describe('main tests', () => {
   let setupNodeJsSpy: jest.SpyInstance;
 
   beforeEach(() => {
+    OfficialBuilds.resetCache();
     inputs = {};
 
     // node

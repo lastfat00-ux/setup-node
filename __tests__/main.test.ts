@@ -40,6 +40,7 @@ describe('main tests', () => {
   let setupNodeJsSpy: jest.SpyInstance;
 
   beforeEach(() => {
+    OfficialBuilds.resetCache();
     inputs = {};
 
     // node

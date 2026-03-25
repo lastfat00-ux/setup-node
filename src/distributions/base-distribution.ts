@@ -15,6 +15,11 @@ import {NodeInputs, INodeVersion, INodeVersionInfo} from './base-models';
 export default abstract class BaseDistribution {
   protected httpClient: hc.HttpClient;
   protected osPlat = os.platform();
+  private static nodeJsVersionsCache = new Map<string, Promise<any>>();
+
+  public static resetCache() {
+    BaseDistribution.nodeJsVersionsCache.clear();
+  }
 
   constructor(protected nodeInfo: NodeInputs) {
     this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -103,16 +108,29 @@ export default abstract class BaseDistribution {
     const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
     const dataUrl = `${initialUrl}/index.json`;
 
+    // Caching based on URL and mirrorToken to prevent redundant network requests
+    // within the same execution flow.
+    const cacheKey = `${dataUrl}:${this.nodeInfo.mirrorToken || ''}`;
+    const cachedPromise = BaseDistribution.nodeJsVersionsCache.get(cacheKey);
+    if (cachedPromise) {
+      core.debug(`Using cached nodejs versions for ${dataUrl}`);
+      const response = await cachedPromise;
+      return response.result || [];
+    }
+
     const headers = {};
 
     if (this.nodeInfo.mirrorToken) {
       headers['Authorization'] = this.nodeInfo.mirrorToken;
     }
 
-    const response = await this.httpClient.getJson<INodeVersion[]>(
+    const responsePromise = this.httpClient.getJson<INodeVersion[]>(
       dataUrl,
       headers
     );
+    BaseDistribution.nodeJsVersionsCache.set(cacheKey, responsePromise);
+
+    const response = await responsePromise;
     return response.result || [];
   }
 

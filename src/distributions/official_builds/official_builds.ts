@@ -10,6 +10,13 @@ interface INodeRelease extends tc.IToolRelease {
 }
 
 export default class OfficialBuilds extends BaseDistribution {
+  private static manifestCache = new Map<string, Promise<tc.IToolRelease[]>>();
+
+  public static resetCache() {
+    OfficialBuilds.manifestCache.clear();
+    BaseDistribution.resetCache();
+  }
+
   constructor(nodeInfo: NodeInputs) {
     super(nodeInfo);
   }
@@ -184,13 +191,29 @@ export default class OfficialBuilds extends BaseDistribution {
   }
 
   private getManifest(): Promise<tc.IToolRelease[]> {
+    const auth = this.nodeInfo.mirror
+      ? this.nodeInfo.mirrorToken
+      : this.nodeInfo.auth;
+
+    // Cache manifest based on auth token to prevent redundant network requests
+    // while ensuring correct isolation.
+    const cacheKey = auth || 'anonymous';
+    const cachedPromise = OfficialBuilds.manifestCache.get(cacheKey);
+    if (cachedPromise) {
+      core.debug('Using cached manifest from actions/node-versions@main');
+      return cachedPromise;
+    }
+
     core.debug('Getting manifest from actions/node-versions@main');
-    return tc.getManifestFromRepo(
+    const responsePromise = tc.getManifestFromRepo(
       'actions',
       'node-versions',
-      this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth,
+      auth,
       'main'
     );
+    OfficialBuilds.manifestCache.set(cacheKey, responsePromise);
+
+    return responsePromise;
   }
 
   private resolveLtsAliasFromManifest(

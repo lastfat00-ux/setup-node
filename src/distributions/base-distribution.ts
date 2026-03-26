@@ -78,9 +78,9 @@ export default abstract class BaseDistribution {
     core.debug(`evaluating ${versions.length} versions`);
 
     for (const potential of versions) {
-      // semver.satisfies accepts a Range object as the second argument
-      // which is more efficient as it skips range parsing
-      const satisfied: boolean = semver.satisfies(potential, rangeObj, options);
+      // rangeObj.test(potential) is more efficient than semver.satisfies(potential, rangeObj)
+      // as it avoids the overhead of the satisfies wrapper.
+      const satisfied: boolean = rangeObj.test(potential);
       if (satisfied) {
         version = potential;
         break;
@@ -352,7 +352,12 @@ export default abstract class BaseDistribution {
       }
     });
 
-    return versions.sort(semver.rcompare);
+    // Schwartzian transform: pre-parse versions into SemVer objects
+    // once to reduce parsing overhead during sort.
+    return versions
+      .map(v => ({string: v, semver: semver.parse(v)}))
+      .sort((a, b) => semver.compare(b.semver!, a.semver!))
+      .map(v => v.string);
   }
 
   protected translateArchToDistUrl(arch: string): string {

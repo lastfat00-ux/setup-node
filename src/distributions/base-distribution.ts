@@ -78,9 +78,8 @@ export default abstract class BaseDistribution {
     core.debug(`evaluating ${versions.length} versions`);
 
     for (const potential of versions) {
-      // semver.satisfies accepts a Range object as the second argument
-      // which is more efficient as it skips range parsing
-      const satisfied: boolean = semver.satisfies(potential, rangeObj, options);
+      // Use rangeObj.test() instead of semver.satisfies() for direct evaluation
+      const satisfied: boolean = rangeObj.test(potential);
       if (satisfied) {
         version = potential;
         break;
@@ -341,18 +340,18 @@ export default abstract class BaseDistribution {
   }
 
   protected filterVersions(nodeJsVersions: INodeVersion[]) {
-    const versions: string[] = [];
-
     const dataFileName = this.getDistFileName();
 
-    nodeJsVersions.forEach((nodeVersion: INodeVersion) => {
-      // ensure this version supports your os and platform
-      if (nodeVersion.files.indexOf(dataFileName) >= 0) {
-        versions.push(nodeVersion.version);
-      }
-    });
-
-    return versions.sort(semver.rcompare);
+    return nodeJsVersions
+      .filter(nodeVersion => nodeVersion.files.includes(dataFileName))
+      // Schwartzian transform: pre-parse versions to avoid redundant parsing during sort (O(N) vs O(N log N))
+      .map(nodeVersion => ({
+        version: nodeVersion.version,
+        parsed: semver.parse(nodeVersion.version)
+      }))
+      .filter(item => item.parsed !== null)
+      .sort((a, b) => b.parsed!.compare(a.parsed!))
+      .map(item => item.version);
   }
 
   protected translateArchToDistUrl(arch: string): string {

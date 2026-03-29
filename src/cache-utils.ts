@@ -66,10 +66,34 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * unit test must reset memoized variables
+ */
+export const resetCommandOutputCache = () => commandOutputCache.clear();
+
 export const getCommandOutput = async (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
+  const cacheKey = `${toolCommand}:${cwd || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    core.debug(`Using cached output for command: ${toolCommand}`);
+    return cachedPromise;
+  }
+
+  const outputPromise = executeCommand(toolCommand, cwd);
+  commandOutputCache.set(cacheKey, outputPromise);
+
+  return outputPromise;
+};
+
+async function executeCommand(
+  toolCommand: string,
+  cwd?: string
+): Promise<string> {
   let {stdout, stderr, exitCode} = await exec.getExecOutput(
     toolCommand,
     undefined,
@@ -84,14 +108,14 @@ export const getCommandOutput = async (
   }
 
   return stdout.trim();
-};
+}
 
 export const getCommandOutputNotEmpty = async (
   toolCommand: string,
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

@@ -7,7 +7,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -37,6 +38,8 @@ describe('cache-utils', () => {
     isFeatureAvailable = jest.spyOn(cache, 'isFeatureAvailable');
 
     getCommandOutputSpy = jest.spyOn(utils, 'getCommandOutput');
+
+    resetCommandOutputCache();
 
     fsRealPathSyncSpy = jest.spyOn(fs, 'realpathSync');
     fsRealPathSyncSpy.mockImplementation(dirName => {

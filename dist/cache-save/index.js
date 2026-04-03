@@ -71619,7 +71619,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.supportedPackageManagers = void 0;
+exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.resetCommandOutputCache = exports.supportedPackageManagers = void 0;
 exports.isGhes = isGhes;
 exports.isCacheFeatureAvailable = isCacheFeatureAvailable;
 const core = __importStar(__nccwpck_require__(37484));
@@ -71656,19 +71656,41 @@ exports.supportedPackageManagers = {
         }
     }
 };
+const commandOutputCache = new Map();
+/**
+ * unit test must reset memoized variables
+ */
+const resetCommandOutputCache = () => commandOutputCache.clear();
+exports.resetCommandOutputCache = resetCommandOutputCache;
 const getCommandOutput = async (toolCommand, cwd) => {
-    let { stdout, stderr, exitCode } = await exec.getExecOutput(toolCommand, undefined, { ignoreReturnCode: true, ...(cwd && { cwd }) });
-    if (exitCode) {
-        stderr = !stderr.trim()
-            ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-            : stderr;
-        throw new Error(stderr);
+    const cacheKey = `${toolCommand}:${cwd || ''}`;
+    const cachedPromise = commandOutputCache.get(cacheKey);
+    if (cachedPromise) {
+        core.debug(`Using cached output for command: ${toolCommand}`);
+        return cachedPromise;
     }
-    return stdout.trim();
+    const resultPromise = (async () => {
+        const output = await exec.getExecOutput(toolCommand, undefined, {
+            ignoreReturnCode: true,
+            ...(cwd && { cwd })
+        });
+        if (!output) {
+            throw new Error(`exec.getExecOutput returned undefined for command: ${toolCommand}`);
+        }
+        if (output.exitCode) {
+            const stderr = !output.stderr.trim()
+                ? `The '${toolCommand}' command failed with exit code: ${output.exitCode}`
+                : output.stderr;
+            throw new Error(stderr);
+        }
+        return output.stdout.trim();
+    })();
+    commandOutputCache.set(cacheKey, resultPromise);
+    return resultPromise;
 };
 exports.getCommandOutput = getCommandOutput;
 const getCommandOutputNotEmpty = async (toolCommand, error, cwd) => {
-    const stdOut = (0, exports.getCommandOutput)(toolCommand, cwd);
+    const stdOut = await (0, exports.getCommandOutput)(toolCommand, cwd);
     if (!stdOut) {
         throw new Error(error);
     }

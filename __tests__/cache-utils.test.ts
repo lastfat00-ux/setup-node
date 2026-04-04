@@ -1,13 +1,16 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
-import * as utils from '../src/cache-utils';
 import {
   PackageManagerInfo,
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache,
+  getPackageManagerInfo,
+  getCommandOutput
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -26,6 +29,7 @@ describe('cache-utils', () => {
   let fsRealPathSyncSpy: jest.SpyInstance;
 
   beforeEach(() => {
+    resetCommandOutputCache();
     console.log('::stop-commands::stoptoken');
     process.env['GITHUB_WORKSPACE'] = path.join(__dirname, 'data');
     debugSpy = jest.spyOn(core, 'debug');
@@ -36,7 +40,7 @@ describe('cache-utils', () => {
 
     isFeatureAvailable = jest.spyOn(cache, 'isFeatureAvailable');
 
-    getCommandOutputSpy = jest.spyOn(utils, 'getCommandOutput');
+    getCommandOutputSpy = jest.spyOn(cacheUtils, 'getCommandOutput');
 
     fsRealPathSyncSpy = jest.spyOn(fs, 'realpathSync');
     fsRealPathSyncSpy.mockImplementation(dirName => {
@@ -57,17 +61,15 @@ describe('cache-utils', () => {
 
   describe('getPackageManagerInfo', () => {
     it.each<[string, PackageManagerInfo | null]>([
-      ['npm', utils.supportedPackageManagers.npm],
-      ['pnpm', utils.supportedPackageManagers.pnpm],
-      ['yarn', utils.supportedPackageManagers.yarn],
+      ['npm', supportedPackageManagers.npm],
+      ['pnpm', supportedPackageManagers.pnpm],
+      ['yarn', supportedPackageManagers.yarn],
       ['yarn1', null],
       ['yarn2', null],
       ['npm7', null]
     ])('getPackageManagerInfo for %s is %o', async (packageManager, result) => {
       getCommandOutputSpy.mockImplementationOnce(() => versionYarn1);
-      await expect(utils.getPackageManagerInfo(packageManager)).resolves.toBe(
-        result
-      );
+      await expect(getPackageManagerInfo(packageManager)).resolves.toBe(result);
     });
   });
 
@@ -100,6 +102,61 @@ describe('cache-utils', () => {
     process.env['GITHUB_SERVER_URL'] = '';
     jest.resetAllMocks();
     jest.clearAllMocks();
+  });
+
+  describe('getCommandOutput tests', () => {
+    it('should memoize command output', async () => {
+      getCommandOutputSpy.mockRestore();
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockImplementation(() => {
+        return Promise.resolve({
+          stdout: 'v1.2.3',
+          stderr: '',
+          exitCode: 0
+        } as any);
+      });
+
+      const output1 = await getCommandOutput('node --version');
+      const output2 = await getCommandOutput('node --version');
+
+      expect(output1).toBe('v1.2.3');
+      expect(output2).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not memoize command output for different commands', async () => {
+      getCommandOutputSpy.mockRestore();
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockImplementation(() => {
+        return Promise.resolve({
+          stdout: 'v1.2.3',
+          stderr: '',
+          exitCode: 0
+        } as any);
+      });
+
+      await getCommandOutput('node --version');
+      await getCommandOutput('npm --version');
+
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should not memoize command output for same command in different cwd', async () => {
+      getCommandOutputSpy.mockRestore();
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockImplementation(() => {
+        return Promise.resolve({
+          stdout: 'v1.2.3',
+          stderr: '',
+          exitCode: 0
+        } as any);
+      });
+
+      await getCommandOutput('node --version', '/dir1');
+      await getCommandOutput('node --version', '/dir2');
+
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('getCacheDirectoriesPaths', () => {

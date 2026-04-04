@@ -66,24 +66,51 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * resetCommandOutputCache is used to clear the cache of external command results.
+ * It is primarily used in unit tests to ensure isolation.
+ */
+export const resetCommandOutputCache = () => commandOutputCache.clear();
+
 export const getCommandOutput = async (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}:${cwd || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    core.debug(`Using cached output for command: "${toolCommand}"`);
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  const execPromise = exec.getExecOutput(toolCommand, undefined, {
+    ignoreReturnCode: true,
+    ...(cwd && {cwd})
+  });
+
+  if (!execPromise) {
+    // This can happen in tests if exec.getExecOutput is mocked without a return value.
+    return '';
+  }
+
+  const responsePromise = execPromise.then(output => {
+    let {stdout, stderr, exitCode} = output;
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  });
+
+  commandOutputCache.set(cacheKey, responsePromise);
+
+  return responsePromise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +118,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

@@ -66,24 +66,50 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
+/**
+ * commandOutputCache is a module-level Map used to memoize results of external command executions.
+ * The cache key is a combination of the tool command and the current working directory.
+ */
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * Resets the command output cache. Used primarily for unit testing.
+ */
+export const resetCommandOutputCache = () => commandOutputCache.clear();
+
 export const getCommandOutput = async (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
+  const cacheKey = `${toolCommand}:${cwd || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
 
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  if (cachedPromise) {
+    core.debug(`Using memoized output for command: ${toolCommand}`);
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  const outputPromise = exec
+    .getExecOutput(toolCommand, undefined, {
+      ignoreReturnCode: true,
+      ...(cwd && {cwd})
+    })
+    .then(output => {
+      if (output.exitCode) {
+        const stderr = !output.stderr.trim()
+          ? `The '${toolCommand}' command failed with exit code: ${output.exitCode}`
+          : output.stderr;
+        throw new Error(stderr);
+      }
+
+      // getCommandOutputNotEmpty depends on the return value being properly validated.
+      // exec.getExecOutput can return undefined in some test environments where it's mocked without a return value.
+      return (output.stdout || '').trim();
+    });
+
+  commandOutputCache.set(cacheKey, outputPromise);
+
+  return outputPromise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +117,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

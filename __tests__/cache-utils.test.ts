@@ -7,7 +7,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -42,6 +43,8 @@ describe('cache-utils', () => {
     fsRealPathSyncSpy.mockImplementation(dirName => {
       return dirName;
     });
+
+    resetCommandOutputCache();
   });
 
   afterEach(() => {

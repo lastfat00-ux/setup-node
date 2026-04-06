@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Cleanup after Install]
 **Learning:** Running `pnpm install` can create a lockfile (like `pnpm-lock.yaml`) if it doesn't exist, which should not be committed unless requested.
 **Action:** Always check for and remove any auto-generated lockfiles or temporary scripts before submission.
+
+## 2025-05-15 - [Process Spawn Overhead in Caching Layer]
+**Learning:** Repetitive external command calls (e.g., `yarn --version`, `npm config get cache`) introduce significant latency (approx. 30ms per call). Memoizing these results within a single execution flow drastically improves performance.
+**Action:** Use a module-level cache for external command outputs and ensure test isolation by resetting the cache in `beforeEach` hooks.

@@ -66,24 +66,43 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * unit test must reset memoized variables
+ */
+export const resetCommandOutputCache = () => commandOutputCache.clear();
+
 export const getCommandOutput = async (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}:${cwd || ''}`;
+  const cached = commandOutputCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
-  return stdout.trim();
+  const outputPromise = exec
+    .getExecOutput(toolCommand, undefined, {
+      ignoreReturnCode: true,
+      ...(cwd && {cwd})
+    })
+    .then(output => {
+      if (output.exitCode) {
+        const stderr = !output.stderr.trim()
+          ? `The '${toolCommand}' command failed with exit code: ${output.exitCode}`
+          : output.stderr;
+        throw new Error(stderr);
+      }
+
+      // Check for undefined stdout to prevent crashes in some mock environments
+      return (output.stdout || '').trim();
+    });
+
+  commandOutputCache.set(cacheKey, outputPromise);
+
+  return outputPromise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +110,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

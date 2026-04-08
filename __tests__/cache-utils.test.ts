@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
 import {
@@ -7,7 +8,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -42,6 +44,8 @@ describe('cache-utils', () => {
     fsRealPathSyncSpy.mockImplementation(dirName => {
       return dirName;
     });
+
+    resetCommandOutputCache();
   });
 
   afterEach(() => {
@@ -292,6 +296,10 @@ describe('cache-utils', () => {
           '/tmp/**/file'
         );
         expect(dirs).toEqual([`file_${version}_1`, `file_${version}_0`]);
+        // With caching, each unique command+cwd is called once.
+        // Commands: 'yarn --version', 'yarn cache dir' or 'yarn config get cacheFolder'
+        // CWDs: '/tmp/dir1', '/tmp/dir2', '/tmp/dir3'
+        // Total: 2 commands * 3 CWDs = 6 calls
         expect(getCommandOutputSpy).toHaveBeenCalledTimes(6);
         expect(getCommandOutputSpy).toHaveBeenCalledWith(
           'yarn --version',
@@ -325,6 +333,43 @@ describe('cache-utils', () => {
         );
       }
     );
+
+    it('getCommandOutput should be memoized', async () => {
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockImplementation(async () => ({
+        stdout: 'foo',
+        stderr: '',
+        exitCode: 0
+      }));
+
+      getCommandOutputSpy.mockRestore(); // Use real implementation
+
+      const res1 = await cacheUtils.getCommandOutput('some-command');
+      const res2 = await cacheUtils.getCommandOutput('some-command');
+
+      expect(res1).toBe('foo');
+      expect(res2).toBe('foo');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+      getExecOutputSpy.mockRestore();
+    });
+
+    it('getCommandOutput should not use cache if reset is called', async () => {
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockImplementation(async () => ({
+        stdout: 'foo',
+        stderr: '',
+        exitCode: 0
+      }));
+
+      getCommandOutputSpy.mockRestore(); // Use real implementation
+
+      await cacheUtils.getCommandOutput('some-command');
+      resetCommandOutputCache();
+      await cacheUtils.getCommandOutput('some-command');
+
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+      getExecOutputSpy.mockRestore();
+    });
 
     it.each(['1.1.1', '2.2.2'])(
       'getCacheDirectoriesPaths yarn v%s should return 4 dirs with multiple globs',

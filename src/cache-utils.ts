@@ -17,6 +17,12 @@ interface SupportedPackageManagers {
   pnpm: PackageManagerInfo;
   yarn: PackageManagerInfo;
 }
+const commandOutputCache = new Map<string, Promise<string>>();
+
+export const resetCommandOutputCache = () => {
+  commandOutputCache.clear();
+};
+
 export const supportedPackageManagers: SupportedPackageManagers = {
   npm: {
     name: 'npm',
@@ -70,20 +76,32 @@ export const getCommandOutput = async (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}:${cwd || ''}`;
+  const cachedResponse = commandOutputCache.get(cacheKey);
+  if (cachedResponse) {
+    return cachedResponse;
   }
 
-  return stdout.trim();
+  const responsePromise = (async () => {
+    let {stdout, stderr, exitCode} = await exec.getExecOutput(
+      toolCommand,
+      undefined,
+      {ignoreReturnCode: true, ...(cwd && {cwd})}
+    );
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  commandOutputCache.set(cacheKey, responsePromise);
+
+  return responsePromise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +109,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

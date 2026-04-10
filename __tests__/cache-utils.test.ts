@@ -7,7 +7,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -26,6 +27,7 @@ describe('cache-utils', () => {
   let fsRealPathSyncSpy: jest.SpyInstance;
 
   beforeEach(() => {
+    resetCommandOutputCache();
     console.log('::stop-commands::stoptoken');
     process.env['GITHUB_WORKSPACE'] = path.join(__dirname, 'data');
     debugSpy = jest.spyOn(core, 'debug');

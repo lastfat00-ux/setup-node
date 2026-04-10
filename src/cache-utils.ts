@@ -66,24 +66,51 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
+/**
+ * commandOutputCache is used to memoize the output of external commands
+ * to improve performance when the same command is called multiple times.
+ */
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * unit test must reset memoized variables
+ */
+export const resetCommandOutputCache = () => commandOutputCache.clear();
+
 export const getCommandOutput = async (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}:${cwd || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  const outputPromise = (async () => {
+    const output = await exec.getExecOutput(toolCommand, undefined, {
+      ignoreReturnCode: true,
+      ...(cwd && {cwd})
+    });
+
+    // In some test environments, exec.getExecOutput might be mocked to return undefined
+    if (!output) {
+      return '';
+    }
+
+    if (output.exitCode) {
+      const stderr = !output.stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${output.exitCode}`
+        : output.stderr;
+      throw new Error(stderr);
+    }
+
+    return output.stdout.trim();
+  })();
+
+  commandOutputCache.set(cacheKey, outputPromise);
+
+  return outputPromise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +118,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

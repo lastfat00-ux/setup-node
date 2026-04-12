@@ -7,7 +7,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -42,6 +43,8 @@ describe('cache-utils', () => {
     fsRealPathSyncSpy.mockImplementation(dirName => {
       return dirName;
     });
+
+    resetCommandOutputCache();
   });
 
   afterEach(() => {
@@ -54,6 +57,39 @@ describe('cache-utils', () => {
     console.log('::stoptoken::');
     jest.restoreAllMocks();
   }, 100000);
+
+  describe('memoization', () => {
+    it('getCommandOutput should return memoized results', async () => {
+      const toolCommand = 'node --version';
+      const expectedOutput = 'v16.13.0';
+
+      // We need to mock the implementation of getCommandOutput to see if it's called
+      // but we also want to test the actual memoization logic in the function.
+      // Since getCommandOutput is exported, we can spy on it, but that might bypass the cache if not careful.
+      // Actually, we want to mock the underlying exec.getExecOutput.
+
+      // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/no-var-requires
+      const exec = require('@actions/exec');
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockResolvedValue({
+        stdout: expectedOutput,
+        stderr: '',
+        exitCode: 0
+      });
+
+      // First call
+      const output1 = await utils.getCommandOutput(toolCommand);
+      expect(output1).toBe(expectedOutput);
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+      // Second call - should be memoized
+      const output2 = await utils.getCommandOutput(toolCommand);
+      expect(output2).toBe(expectedOutput);
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+      getExecOutputSpy.mockRestore();
+    });
+  });
 
   describe('getPackageManagerInfo', () => {
     it.each<[string, PackageManagerInfo | null]>([

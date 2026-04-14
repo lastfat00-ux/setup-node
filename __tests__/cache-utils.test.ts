@@ -1,13 +1,15 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
 import path from 'path';
+import * as exec from '@actions/exec';
 import * as utils from '../src/cache-utils';
 import {
   PackageManagerInfo,
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -37,6 +39,8 @@ describe('cache-utils', () => {
     isFeatureAvailable = jest.spyOn(cache, 'isFeatureAvailable');
 
     getCommandOutputSpy = jest.spyOn(utils, 'getCommandOutput');
+
+    resetCommandOutputCache();
 
     fsRealPathSyncSpy = jest.spyOn(fs, 'realpathSync');
     fsRealPathSyncSpy.mockImplementation(dirName => {
@@ -325,6 +329,33 @@ describe('cache-utils', () => {
         );
       }
     );
+
+    it('getCommandOutput should memoize results', async () => {
+      getCommandOutputSpy.mockRestore(); // Restore the spy so we test the real implementation
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockImplementation(async () => ({
+        stdout: 'v1.2.3',
+        stderr: '',
+        exitCode: 0
+      }));
+
+      // First call
+      const output1 = await utils.getCommandOutput('node --version');
+      expect(output1).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+      // Second call (same command)
+      const output2 = await utils.getCommandOutput('node --version');
+      expect(output2).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1); // Should still be 1
+
+      // Third call (different CWD)
+      const output3 = await utils.getCommandOutput('node --version', '/tmp');
+      expect(output3).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2); // Should be 2 now
+
+      getExecOutputSpy.mockRestore();
+    });
 
     it.each(['1.1.1', '2.2.2'])(
       'getCacheDirectoriesPaths yarn v%s should return 4 dirs with multiple globs',

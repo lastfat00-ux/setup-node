@@ -7,7 +7,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -36,6 +37,7 @@ describe('cache-utils', () => {
 
     isFeatureAvailable = jest.spyOn(cache, 'isFeatureAvailable');
 
+    resetCommandOutputCache();
     getCommandOutputSpy = jest.spyOn(utils, 'getCommandOutput');
 
     fsRealPathSyncSpy = jest.spyOn(fs, 'realpathSync');
@@ -124,6 +126,7 @@ describe('cache-utils', () => {
       );
 
       resetProjectDirectoriesMemoized();
+      resetCommandOutputCache();
     });
 
     afterEach(() => {

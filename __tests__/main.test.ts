@@ -13,6 +13,7 @@ import each from 'jest-each';
 import * as main from '../src/main';
 import * as util from '../src/util';
 import OfficialBuilds from '../src/distributions/official_builds/official_builds';
+import {resetCommandOutputCache} from '../src/cache-utils';
 
 describe('main tests', () => {
   let inputs = {} as any;
@@ -41,6 +42,7 @@ describe('main tests', () => {
 
   beforeEach(() => {
     OfficialBuilds.resetCache();
+    resetCommandOutputCache();
     inputs = {};
 
     // node

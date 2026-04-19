@@ -5,3 +5,11 @@
 ## 2025-05-15 - [Cleanup after Install]
 **Learning:** Running `pnpm install` can create a lockfile (like `pnpm-lock.yaml`) if it doesn't exist, which should not be committed unless requested.
 **Action:** Always check for and remove any auto-generated lockfiles or temporary scripts before submission.
+
+## 2025-05-16 - [Memoizing External Command Outputs]
+**Learning:** Spawning external processes via `exec.getExecOutput` is expensive (~15-20ms per call). Caching the resulting `Promise` (not just the value) prevents redundant spawns and handles concurrent calls gracefully.
+**Action:** Use a `Map<string, Promise<string>>` for command outputs and ensure a `resetCache` mechanism exists for test isolation.
+
+## 2025-05-16 - [Async Truthiness Bug]
+**Learning:** Checking the truthiness of a `Promise` returned by an async function without `await` (e.g., `if (getOutput())`) always evaluates to true, even if the eventual output is an empty string.
+**Action:** Always `await` async results before performing validation checks.

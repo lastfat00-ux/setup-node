@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
 import {
@@ -7,7 +8,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -68,6 +70,73 @@ describe('cache-utils', () => {
       await expect(utils.getPackageManagerInfo(packageManager)).resolves.toBe(
         result
       );
+    });
+  });
+
+  describe('getCommandOutput memoization', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      resetCommandOutputCache();
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      // We need to restore the spy on getCommandOutput because it was set in the outer describe
+      getCommandOutputSpy.mockRestore();
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+      // Re-establish the spy for other tests
+      getCommandOutputSpy = jest.spyOn(utils, 'getCommandOutput');
+    });
+
+    it('should memoize command output', async () => {
+      getExecOutputSpy.mockImplementation(() =>
+        Promise.resolve({
+          stdout: 'v1.2.3',
+          stderr: '',
+          exitCode: 0
+        })
+      );
+
+      const output1 = await utils.getCommandOutput('node --version');
+      const output2 = await utils.getCommandOutput('node --version');
+
+      expect(output1).toBe('v1.2.3');
+      expect(output2).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should memoize per cwd', async () => {
+      getExecOutputSpy.mockImplementation((cmd, args, options) =>
+        Promise.resolve({
+          stdout: options?.cwd || 'root',
+          stderr: '',
+          exitCode: 0
+        })
+      );
+
+      const output1 = await utils.getCommandOutput('node --version', 'dir1');
+      const output2 = await utils.getCommandOutput('node --version', 'dir1');
+      const output3 = await utils.getCommandOutput('node --version', 'dir2');
+
+      expect(output1).toBe('dir1');
+      expect(output2).toBe('dir1');
+      expect(output3).toBe('dir2');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should fix getCommandOutputNotEmpty await bug', async () => {
+      getExecOutputSpy.mockImplementation(() =>
+        Promise.resolve({
+          stdout: '',
+          stderr: '',
+          exitCode: 0
+        })
+      );
+
+      await expect(
+        utils.getCommandOutputNotEmpty('cmd', 'error message')
+      ).rejects.toThrow('error message');
     });
   });
 

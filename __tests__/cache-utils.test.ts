@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import * as exec from '@actions/exec';
 import * as cache from '@actions/cache';
 import path from 'path';
 import * as utils from '../src/cache-utils';
@@ -7,7 +8,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -130,6 +132,40 @@ describe('cache-utils', () => {
       existsSpy.mockRestore();
       lstatSpy.mockRestore();
       globCreateSpy.mockRestore();
+      resetCommandOutputCache();
+    });
+
+    describe('memoization', () => {
+      it('getCommandOutput should be memoized', async () => {
+        getCommandOutputSpy.mockRestore();
+        const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+        getExecOutputSpy.mockImplementation(() =>
+          Promise.resolve({stdout: 'bar', stderr: '', exitCode: 0})
+        );
+
+        // First call - should call exec.getExecOutput
+        const output1 = await cacheUtils.getCommandOutput('foo');
+        expect(output1).toBe('bar');
+        expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+        // Second call - should use cache
+        const output2 = await cacheUtils.getCommandOutput('foo');
+        expect(output2).toBe('bar');
+        expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+        // Different arguments - should call exec.getExecOutput again
+        const output3 = await cacheUtils.getCommandOutput('foo', 'baz');
+        expect(output3).toBe('bar');
+        expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+
+        // Reset cache
+        resetCommandOutputCache();
+        const output4 = await cacheUtils.getCommandOutput('foo');
+        expect(output4).toBe('bar');
+        expect(getExecOutputSpy).toHaveBeenCalledTimes(3);
+
+        getExecOutputSpy.mockRestore();
+      });
     });
 
     it.each([

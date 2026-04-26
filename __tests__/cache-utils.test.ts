@@ -7,7 +7,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -28,6 +29,7 @@ describe('cache-utils', () => {
   beforeEach(() => {
     console.log('::stop-commands::stoptoken');
     process.env['GITHUB_WORKSPACE'] = path.join(__dirname, 'data');
+    resetCommandOutputCache();
     debugSpy = jest.spyOn(core, 'debug');
     debugSpy.mockImplementation(msg => {});
 

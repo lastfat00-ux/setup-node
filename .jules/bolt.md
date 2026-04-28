@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Cleanup after Install]
 **Learning:** Running `pnpm install` can create a lockfile (like `pnpm-lock.yaml`) if it doesn't exist, which should not be committed unless requested.
 **Action:** Always check for and remove any auto-generated lockfiles or temporary scripts before submission.
+
+## 2025-05-15 - [Memoizing External Command Output]
+**Learning:** External command execution via `exec.getExecOutput` is a major bottleneck in monorepos or when frequent environment checks are performed.
+**Action:** Use a module-level `Map` to memoize command results based on command string and working directory. Ensure a reset mechanism is provided for test isolation.

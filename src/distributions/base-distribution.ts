@@ -3,6 +3,8 @@ import * as hc from '@actions/http-client';
 import * as core from '@actions/core';
 import * as io from '@actions/io';
 
+import {resetCommandOutputCache} from '../cache-utils';
+
 import semver from 'semver';
 import * as assert from 'assert';
 
@@ -19,6 +21,7 @@ export default abstract class BaseDistribution {
 
   public static resetCache() {
     BaseDistribution.nodeJsVersionsCache.clear();
+    resetCommandOutputCache();
   }
 
   constructor(protected nodeInfo: NodeInputs) {

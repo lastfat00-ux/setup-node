@@ -20,6 +20,7 @@ export default abstract class BasePrereleaseNodejs extends BaseDistribution {
         version,
         parsed: semver.parse(version)
       }))
+      .filter(item => item.parsed !== null)
       .filter(item => {
         const prerelease = item.parsed?.prerelease;
         if (!prerelease || prerelease.length === 0) {

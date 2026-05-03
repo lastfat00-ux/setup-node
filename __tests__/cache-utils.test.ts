@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import * as exec from '@actions/exec';
 import * as cache from '@actions/cache';
 import path from 'path';
 import * as utils from '../src/cache-utils';
@@ -7,7 +8,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -100,6 +102,55 @@ describe('cache-utils', () => {
     process.env['GITHUB_SERVER_URL'] = '';
     jest.resetAllMocks();
     jest.clearAllMocks();
+  });
+
+  describe('memoization', () => {
+    it('should memoize getCommandOutput', async () => {
+      const toolCommand = 'test-command';
+      const output = 'test-output';
+
+      getCommandOutputSpy.mockRestore(); // Restore the spy on utils.getCommandOutput
+      const execSpy = jest.spyOn(exec, 'getExecOutput');
+      execSpy.mockResolvedValue({
+        stdout: output,
+        stderr: '',
+        exitCode: 0
+      });
+
+      resetCommandOutputCache();
+
+      const result1 = await utils.getCommandOutput(toolCommand);
+      const result2 = await utils.getCommandOutput(toolCommand);
+
+      expect(result1).toBe(output);
+      expect(result2).toBe(output);
+      expect(execSpy).toHaveBeenCalledTimes(1);
+
+      execSpy.mockRestore();
+    });
+
+    it('should reset memoization cache', async () => {
+      const toolCommand = 'test-command';
+      const output = 'test-output';
+
+      getCommandOutputSpy.mockRestore(); // Restore the spy on utils.getCommandOutput
+      const execSpy = jest.spyOn(exec, 'getExecOutput');
+      execSpy.mockResolvedValue({
+        stdout: output,
+        stderr: '',
+        exitCode: 0
+      });
+
+      resetCommandOutputCache();
+
+      await utils.getCommandOutput(toolCommand);
+      resetCommandOutputCache();
+      await utils.getCommandOutput(toolCommand);
+
+      expect(execSpy).toHaveBeenCalledTimes(2);
+
+      execSpy.mockRestore();
+    });
   });
 
   describe('getCacheDirectoriesPaths', () => {

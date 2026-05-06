@@ -7,7 +7,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -42,6 +43,8 @@ describe('cache-utils', () => {
     fsRealPathSyncSpy.mockImplementation(dirName => {
       return dirName;
     });
+
+    resetCommandOutputCache();
   });
 
   afterEach(() => {
@@ -397,5 +400,74 @@ describe('isGhes', () => {
   it('returns true when the GITHUB_SERVER_URL environment variable is set to some other URL', () => {
     process.env['GITHUB_SERVER_URL'] = 'https://src.onpremise.fabrikam.com';
     expect(isGhes()).toBeTruthy();
+  });
+});
+
+
+describe('getCommandOutput memoization', () => {
+  it('should only call exec.getExecOutput once for the same command and directory', async () => {
+    const exec = await import('@actions/exec');
+    const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    getExecOutputSpy.mockResolvedValue({
+      stdout: 'v1.2.3',
+      stderr: '',
+      exitCode: 0
+    });
+
+    // Reset cache to ensure we start fresh for this test
+    cacheUtils.resetCommandOutputCache();
+
+    const command = 'node --version';
+    const output1 = await cacheUtils.getCommandOutput(command);
+    const output2 = await cacheUtils.getCommandOutput(command);
+
+    expect(output1).toBe('v1.2.3');
+    expect(output2).toBe('v1.2.3');
+    expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+    getExecOutputSpy.mockRestore();
+  });
+
+  it('should call exec.getExecOutput again if the directory is different', async () => {
+    const exec = await import('@actions/exec');
+    const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    getExecOutputSpy.mockResolvedValue({
+      stdout: 'v1.2.3',
+      stderr: '',
+      exitCode: 0
+    });
+
+    // Reset cache to ensure we start fresh for this test
+    cacheUtils.resetCommandOutputCache();
+
+    const command = 'node --version';
+    // Using actual existing directory from __tests__/data
+    const dir1 = path.join(__dirname, 'data');
+    const dir2 = __dirname;
+
+    await cacheUtils.getCommandOutput(command, dir1);
+    await cacheUtils.getCommandOutput(command, dir2);
+
+    expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+
+    getExecOutputSpy.mockRestore();
+  });
+
+  it('should throw and not cache if getCommandOutputNotEmpty receives empty output', async () => {
+    const exec = await import('@actions/exec');
+    const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    getExecOutputSpy.mockResolvedValue({
+      stdout: '',
+      stderr: '',
+      exitCode: 0
+    });
+
+    // Reset cache to ensure we start fresh for this test
+    cacheUtils.resetCommandOutputCache();
+
+    const command = 'node'; // Use an existing command to avoid "Unable to locate executable file"
+    await expect(cacheUtils.getCommandOutputNotEmpty(command, 'Error message')).rejects.toThrow('Error message');
+
+    getExecOutputSpy.mockRestore();
   });
 });

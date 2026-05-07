@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
 import {
@@ -7,7 +8,9 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache,
+  getCommandOutputNotEmpty
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -38,6 +41,8 @@ describe('cache-utils', () => {
 
     getCommandOutputSpy = jest.spyOn(utils, 'getCommandOutput');
 
+    resetCommandOutputCache();
+
     fsRealPathSyncSpy = jest.spyOn(fs, 'realpathSync');
     fsRealPathSyncSpy.mockImplementation(dirName => {
       return dirName;
@@ -54,6 +59,40 @@ describe('cache-utils', () => {
     console.log('::stoptoken::');
     jest.restoreAllMocks();
   }, 100000);
+
+  describe('getCommandOutputNotEmpty', () => {
+    it('should throw error if output is empty', async () => {
+      getCommandOutputSpy.mockResolvedValue('');
+      await expect(
+        getCommandOutputNotEmpty('test', 'error message')
+      ).rejects.toThrow('error message');
+    });
+
+    it('should return output if not empty', async () => {
+      getCommandOutputSpy.mockResolvedValue('output');
+      const result = await getCommandOutputNotEmpty('test', 'error message');
+      expect(result).toBe('output');
+    });
+  });
+
+  describe('getCommandOutput memoization', () => {
+    it('should call getExecOutput only once for the same command', async () => {
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'v1.2.3',
+        stderr: '',
+        exitCode: 0
+      });
+
+      // We need to restore getCommandOutputSpy to test the actual implementation
+      getCommandOutputSpy.mockRestore();
+
+      await utils.getCommandOutput('node --version');
+      await utils.getCommandOutput('node --version');
+
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+  });
 
   describe('getPackageManagerInfo', () => {
     it.each<[string, PackageManagerInfo | null]>([

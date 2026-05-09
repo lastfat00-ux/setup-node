@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Cleanup after Install]
 **Learning:** Running `pnpm install` can create a lockfile (like `pnpm-lock.yaml`) if it doesn't exist, which should not be committed unless requested.
 **Action:** Always check for and remove any auto-generated lockfiles or temporary scripts before submission.
+
+## 2026-05-09 - [External Command Execution Bottleneck]
+**Learning:** External command execution via `exec.getExecOutput` is a primary bottleneck in monorepos due to redundant process spawns for configuration checks (e.g., Yarn's `enableGlobalCache`).
+**Action:** Memoize standard command outputs (like package manager paths) at the module level using a `Map` of promises. Ensure proper test isolation by providing a cache reset mechanism.

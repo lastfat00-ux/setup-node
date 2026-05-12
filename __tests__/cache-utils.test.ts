@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
 import {
@@ -7,7 +8,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -56,6 +58,32 @@ describe('cache-utils', () => {
   }, 100000);
 
   describe('getPackageManagerInfo', () => {
+    it('should memoize getCommandOutput results', async () => {
+      // Access the actual getCommandOutput to test memoization
+      // but we need to mock the underlying exec.getExecOutput
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'v1.2.3',
+        stderr: '',
+        exitCode: 0
+      });
+
+      resetCommandOutputCache();
+
+      // First call - should trigger exec
+      const output1 = await utils.getCommandOutput('node --version');
+      expect(output1).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+      // Second call - should be memoized
+      const output2 = await utils.getCommandOutput('node --version');
+      expect(output2).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+      expect(debugSpy).toHaveBeenCalledWith('Using cached output for command: node --version');
+
+      getExecOutputSpy.mockRestore();
+    });
+
     it.each<[string, PackageManagerInfo | null]>([
       ['npm', utils.supportedPackageManagers.npm],
       ['pnpm', utils.supportedPackageManagers.pnpm],

@@ -7,7 +7,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -42,6 +43,8 @@ describe('cache-utils', () => {
     fsRealPathSyncSpy.mockImplementation(dirName => {
       return dirName;
     });
+
+    resetCommandOutputCache();
   });
 
   afterEach(() => {
@@ -54,6 +57,21 @@ describe('cache-utils', () => {
     console.log('::stoptoken::');
     jest.restoreAllMocks();
   }, 100000);
+
+  describe('getCommandOutputNotEmpty', () => {
+    it('should throw error if command output is empty', async () => {
+      getCommandOutputSpy.mockResolvedValue('');
+      await expect(
+        utils.getCommandOutputNotEmpty('foo', 'error message')
+      ).rejects.toThrow('error message');
+    });
+
+    it('should return output if command output is not empty', async () => {
+      getCommandOutputSpy.mockResolvedValue('bar');
+      const output = await utils.getCommandOutputNotEmpty('foo', 'error message');
+      expect(output).toBe('bar');
+    });
+  });
 
   describe('getPackageManagerInfo', () => {
     it.each<[string, PackageManagerInfo | null]>([

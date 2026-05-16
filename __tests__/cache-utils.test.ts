@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import * as exec from '@actions/exec';
 import * as cache from '@actions/cache';
 import path from 'path';
 import * as utils from '../src/cache-utils';
@@ -7,7 +8,8 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -42,6 +44,8 @@ describe('cache-utils', () => {
     fsRealPathSyncSpy.mockImplementation(dirName => {
       return dirName;
     });
+
+    resetCommandOutputCache();
   });
 
   afterEach(() => {
@@ -359,6 +363,32 @@ describe('cache-utils', () => {
         ]);
       }
     );
+
+    it('getCommandOutputNotEmpty should throw for empty output', async () => {
+      getCommandOutputSpy.mockImplementation(() => Promise.resolve(''));
+      await expect(
+        cacheUtils.getCommandOutputNotEmpty('foo', 'error')
+      ).rejects.toThrow('error');
+    });
+
+    it('getCommandOutput should memoize results', async () => {
+      getCommandOutputSpy.mockRestore();
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockImplementation(() =>
+        Promise.resolve({
+          stdout: 'bar',
+          stderr: '',
+          exitCode: 0
+        })
+      );
+
+      const res1 = await cacheUtils.getCommandOutput('foo');
+      const res2 = await cacheUtils.getCommandOutput('foo');
+
+      expect(res1).toBe('bar');
+      expect(res2).toBe('bar');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
   });
 });
 

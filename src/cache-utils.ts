@@ -12,6 +12,17 @@ export interface PackageManagerInfo {
   getCacheFolderPath: (projectDir?: string) => Promise<string>;
 }
 
+/**
+ * Cache for command outputs to avoid redundant process spawns.
+ * Keyed by `${toolCommand}:${cwd || ''}`
+ */
+const commandOutputCache = new Map<string, string>();
+
+/**
+ * Clears the command output cache. Used for testing and cache invalidation.
+ */
+export const resetCommandOutputCache = () => commandOutputCache.clear();
+
 interface SupportedPackageManagers {
   npm: PackageManagerInfo;
   pnpm: PackageManagerInfo;
@@ -70,6 +81,13 @@ export const getCommandOutput = async (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
+  const cacheKey = `${toolCommand}:${cwd || ''}`;
+  const cachedOutput = commandOutputCache.get(cacheKey);
+  if (cachedOutput !== undefined) {
+    core.debug(`Using cached output for command: ${toolCommand} in ${cwd || 'default'}`);
+    return cachedOutput;
+  }
+
   let {stdout, stderr, exitCode} = await exec.getExecOutput(
     toolCommand,
     undefined,
@@ -83,7 +101,9 @@ export const getCommandOutput = async (
     throw new Error(stderr);
   }
 
-  return stdout.trim();
+  const result = stdout.trim();
+  commandOutputCache.set(cacheKey, result);
+  return result;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +111,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

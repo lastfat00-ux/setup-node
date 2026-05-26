@@ -70,6 +70,11 @@ export const getCommandOutput = async (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
+  const cacheKey = `${toolCommand}\0${cwd || ''}`;
+  if (commandOutputCache.has(cacheKey)) {
+    return commandOutputCache.get(cacheKey)!;
+  }
+
   let {stdout, stderr, exitCode} = await exec.getExecOutput(
     toolCommand,
     undefined,
@@ -83,7 +88,9 @@ export const getCommandOutput = async (
     throw new Error(stderr);
   }
 
-  return stdout.trim();
+  const result = stdout.trim();
+  commandOutputCache.set(cacheKey, result);
+  return result;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +98,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }
@@ -119,11 +126,15 @@ export const getPackageManagerInfo = async (packageManager: string) => {
  */
 
 let projectDirectoriesMemoized: string[] | null = null;
+const commandOutputCache = new Map<string, string>();
+
 /**
  * unit test must reset memoized variables
  */
 export const resetProjectDirectoriesMemoized = () =>
   (projectDirectoriesMemoized = null);
+
+export const resetCommandOutputCache = () => commandOutputCache.clear();
 /**
  * Expands (converts) the string input `cache-dependency-path` to list of directories that
  * may be project roots

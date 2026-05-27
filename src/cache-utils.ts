@@ -66,10 +66,24 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
+const commandOutputCache = new Map<string, string>();
+
+/**
+ * unit test must reset memoized variables
+ */
+export const resetCommandOutputCache = () => commandOutputCache.clear();
+
 export const getCommandOutput = async (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
+  const cacheKey = `${toolCommand}\0${cwd || ''}`;
+  const cached = commandOutputCache.get(cacheKey);
+  if (cached !== undefined) {
+    core.debug(`[Bolt] Using cached output for command: ${toolCommand}`);
+    return cached;
+  }
+
   let {stdout, stderr, exitCode} = await exec.getExecOutput(
     toolCommand,
     undefined,
@@ -83,7 +97,9 @@ export const getCommandOutput = async (
     throw new Error(stderr);
   }
 
-  return stdout.trim();
+  const result = stdout.trim();
+  commandOutputCache.set(cacheKey, result);
+  return result;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +107,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

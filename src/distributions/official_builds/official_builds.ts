@@ -4,6 +4,7 @@ import path from 'path';
 
 import BaseDistribution from '../base-distribution';
 import {NodeInputs, INodeVersion, INodeVersionInfo} from '../base-models';
+import {resetCommandOutputCache} from '../../cache-utils';
 
 interface INodeRelease extends tc.IToolRelease {
   lts?: string;
@@ -15,6 +16,7 @@ export default class OfficialBuilds extends BaseDistribution {
   public static resetCache() {
     OfficialBuilds.manifestCache.clear();
     BaseDistribution.resetCache();
+    resetCommandOutputCache();
   }
 
   constructor(nodeInfo: NodeInputs) {

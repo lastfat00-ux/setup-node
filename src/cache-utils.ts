@@ -66,24 +66,53 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
+/**
+ * Internal cache for command outputs to avoid redundant shell executions.
+ * The key is a combination of the tool command and the working directory.
+ */
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * Resets the command output cache.
+ * Useful for test isolation.
+ */
+export const resetCommandOutputCache = () => commandOutputCache.clear();
+
 export const getCommandOutput = async (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}:\0${cwd || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  const outputPromise = (async () => {
+    let {stdout, stderr, exitCode} = await exec.getExecOutput(
+      toolCommand,
+      undefined,
+      {ignoreReturnCode: true, ...(cwd && {cwd})}
+    );
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  // Cache the promise immediately to handle concurrent calls for the same command
+  commandOutputCache.set(cacheKey, outputPromise);
+
+  // If the promise fails, remove it from the cache to allow retries
+  return outputPromise.catch(err => {
+    commandOutputCache.delete(cacheKey);
+    throw err;
+  });
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +120,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

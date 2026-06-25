@@ -71619,7 +71619,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.supportedPackageManagers = void 0;
+exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.resetCommandOutputCache = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.supportedPackageManagers = void 0;
 exports.isGhes = isGhes;
 exports.isCacheFeatureAvailable = isCacheFeatureAvailable;
 const core = __importStar(__nccwpck_require__(37484));
@@ -71656,19 +71656,33 @@ exports.supportedPackageManagers = {
         }
     }
 };
+const commandOutputCache = new Map();
 const getCommandOutput = async (toolCommand, cwd) => {
-    let { stdout, stderr, exitCode } = await exec.getExecOutput(toolCommand, undefined, { ignoreReturnCode: true, ...(cwd && { cwd }) });
-    if (exitCode) {
-        stderr = !stderr.trim()
-            ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-            : stderr;
-        throw new Error(stderr);
+    const cacheKey = `${toolCommand}\0${cwd || ''}`;
+    const cachedOutput = commandOutputCache.get(cacheKey);
+    if (cachedOutput) {
+        return cachedOutput;
     }
-    return stdout.trim();
+    const outputPromise = (async () => {
+        let { stdout, stderr, exitCode } = await exec.getExecOutput(toolCommand, undefined, { ignoreReturnCode: true, ...(cwd && { cwd }) });
+        if (exitCode) {
+            stderr = !stderr.trim()
+                ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+                : stderr;
+            throw new Error(stderr);
+        }
+        return stdout.trim();
+    })();
+    commandOutputCache.set(cacheKey, outputPromise);
+    // Remove the promise from the cache if it fails to prevent caching errors
+    outputPromise.catch(() => {
+        commandOutputCache.delete(cacheKey);
+    });
+    return outputPromise;
 };
 exports.getCommandOutput = getCommandOutput;
 const getCommandOutputNotEmpty = async (toolCommand, error, cwd) => {
-    const stdOut = (0, exports.getCommandOutput)(toolCommand, cwd);
+    const stdOut = await (0, exports.getCommandOutput)(toolCommand, cwd);
     if (!stdOut) {
         throw new Error(error);
     }
@@ -71698,10 +71712,15 @@ exports.getPackageManagerInfo = getPackageManagerInfo;
  *  it contains expensive IO operation and thus should be memoized
  */
 let projectDirectoriesMemoized = null;
+const resetCommandOutputCache = () => commandOutputCache.clear();
+exports.resetCommandOutputCache = resetCommandOutputCache;
 /**
  * unit test must reset memoized variables
  */
-const resetProjectDirectoriesMemoized = () => (projectDirectoriesMemoized = null);
+const resetProjectDirectoriesMemoized = () => {
+    projectDirectoriesMemoized = null;
+    (0, exports.resetCommandOutputCache)();
+};
 exports.resetProjectDirectoriesMemoized = resetProjectDirectoriesMemoized;
 /**
  * Expands (converts) the string input `cache-dependency-path` to list of directories that

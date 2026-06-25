@@ -66,24 +66,44 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
+const commandOutputCache = new Map<string, Promise<string>>();
+
 export const getCommandOutput = async (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
+  const cacheKey = `${toolCommand}\0${cwd || ''}`;
+  const cachedOutput = commandOutputCache.get(cacheKey);
 
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  if (cachedOutput) {
+    return cachedOutput;
   }
 
-  return stdout.trim();
+  const outputPromise = (async () => {
+    let {stdout, stderr, exitCode} = await exec.getExecOutput(
+      toolCommand,
+      undefined,
+      {ignoreReturnCode: true, ...(cwd && {cwd})}
+    );
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  commandOutputCache.set(cacheKey, outputPromise);
+
+  // Remove the promise from the cache if it fails to prevent caching errors
+  outputPromise.catch(() => {
+    commandOutputCache.delete(cacheKey);
+  });
+
+  return outputPromise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +111,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }
@@ -119,11 +139,15 @@ export const getPackageManagerInfo = async (packageManager: string) => {
  */
 
 let projectDirectoriesMemoized: string[] | null = null;
+export const resetCommandOutputCache = () => commandOutputCache.clear();
+
 /**
  * unit test must reset memoized variables
  */
-export const resetProjectDirectoriesMemoized = () =>
-  (projectDirectoriesMemoized = null);
+export const resetProjectDirectoriesMemoized = () => {
+  projectDirectoriesMemoized = null;
+  resetCommandOutputCache();
+};
 /**
  * Expands (converts) the string input `cache-dependency-path` to list of directories that
  * may be project roots

@@ -71619,7 +71619,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.supportedPackageManagers = void 0;
+exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.resetCommandOutputCache = exports.supportedPackageManagers = void 0;
 exports.isGhes = isGhes;
 exports.isCacheFeatureAvailable = isCacheFeatureAvailable;
 const core = __importStar(__nccwpck_require__(37484));
@@ -71656,19 +71656,35 @@ exports.supportedPackageManagers = {
         }
     }
 };
+const commandOutputCache = new Map();
+const resetCommandOutputCache = () => commandOutputCache.clear();
+exports.resetCommandOutputCache = resetCommandOutputCache;
 const getCommandOutput = async (toolCommand, cwd) => {
-    let { stdout, stderr, exitCode } = await exec.getExecOutput(toolCommand, undefined, { ignoreReturnCode: true, ...(cwd && { cwd }) });
-    if (exitCode) {
-        stderr = !stderr.trim()
-            ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-            : stderr;
-        throw new Error(stderr);
+    const cacheKey = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+    const cachedPromise = commandOutputCache.get(cacheKey);
+    if (cachedPromise) {
+        return cachedPromise;
     }
-    return stdout.trim();
+    const resultPromise = (async () => {
+        let { stdout, stderr, exitCode } = await exec.getExecOutput(toolCommand, undefined, { ignoreReturnCode: true, ...(cwd && { cwd }) });
+        if (exitCode) {
+            stderr = !stderr.trim()
+                ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+                : stderr;
+            throw new Error(stderr);
+        }
+        return stdout.trim();
+    })();
+    commandOutputCache.set(cacheKey, resultPromise);
+    // Remove the promise from cache on failure to avoid caching permanent errors
+    resultPromise.catch(() => {
+        commandOutputCache.delete(cacheKey);
+    });
+    return resultPromise;
 };
 exports.getCommandOutput = getCommandOutput;
 const getCommandOutputNotEmpty = async (toolCommand, error, cwd) => {
-    const stdOut = (0, exports.getCommandOutput)(toolCommand, cwd);
+    const stdOut = await (0, exports.getCommandOutput)(toolCommand, cwd);
     if (!stdOut) {
         throw new Error(error);
     }

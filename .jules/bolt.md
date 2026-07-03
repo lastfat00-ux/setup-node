@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Cleanup after Install]
 **Learning:** Running `pnpm install` can create a lockfile (like `pnpm-lock.yaml`) if it doesn't exist, which should not be committed unless requested.
 **Action:** Always check for and remove any auto-generated lockfiles or temporary scripts before submission.
+
+## 2025-05-15 - [Promise-based Memoization for Shell Commands]
+**Learning:** In monorepos, shell commands like `yarn --version` or `npm config get cache` are executed repeatedly across project directories. Caching the *Promise* (not just the value) prevents redundant process spawns when multiple concurrent calls occur ("thundering herd"). Delimiting keys with `\0` and including `PATH` and `cwd` ensures correctness.
+**Action:** Use a `Map<string, Promise<T>>` for command memoization and ensure `.catch` clears the cache entry to avoid poisoning the cache with transient failures.

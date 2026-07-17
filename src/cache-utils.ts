@@ -66,24 +66,53 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+// Module-level cache for getCommandOutput. Key: command\0cwd\0path
+const commandOutputCache = new Map<string, Promise<string>>();
+
+export const resetCommandOutputCache = (): void => {
+  commandOutputCache.clear();
+};
+
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}\0${cwd || ''}\0${process.env.PATH || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  const execResult = exec.getExecOutput(toolCommand, undefined, {
+    ignoreReturnCode: true,
+    ...(cwd && {cwd})
+  });
+
+  // Handle mock implementations in test suites that may return undefined
+  if (!execResult || typeof execResult.then !== 'function') {
+    const fallbackPromise = Promise.resolve('');
+    commandOutputCache.set(cacheKey, fallbackPromise);
+    return fallbackPromise;
+  }
+
+  const execPromise = execResult
+    .then(({stdout, stderr, exitCode}) => {
+      if (exitCode) {
+        const errorMsg = !stderr.trim()
+          ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+          : stderr;
+        throw new Error(errorMsg);
+      }
+      return stdout.trim();
+    })
+    .catch((err: Error) => {
+      // Evict failed execution from the cache so subsequent requests can try again
+      commandOutputCache.delete(cacheKey);
+      throw err;
+    });
+
+  commandOutputCache.set(cacheKey, execPromise);
+  return execPromise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +120,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

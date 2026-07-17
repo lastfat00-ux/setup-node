@@ -7,13 +7,16 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache,
+  getCommandOutput
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
 import * as glob from '@actions/glob';
 import {Globber} from '@actions/glob';
 import {MockGlobber} from './mock/glob-mock';
+import * as exec from '@actions/exec';
 
 describe('cache-utils', () => {
   const versionYarn1 = '1.2.3';
@@ -359,6 +362,97 @@ describe('cache-utils', () => {
         ]);
       }
     );
+  });
+
+  describe('getCommandOutput caching', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      // Restore getCommandOutputSpy so we test the actual implementation of getCommandOutput
+      getCommandOutputSpy.mockRestore();
+      resetCommandOutputCache();
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+      resetCommandOutputCache();
+    });
+
+    it('should reuse the same Promise and call exec.getExecOutput only once for identical commands and directory', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'test-output',
+        stderr: ''
+      });
+
+      const p1 = getCommandOutput('echo "hello"', '/some/dir');
+      const p2 = getCommandOutput('echo "hello"', '/some/dir');
+
+      expect(p1).toBe(p2); // preserving promise identity
+
+      const res1 = await p1;
+      const res2 = await p2;
+
+      expect(res1).toBe('test-output');
+      expect(res2).toBe('test-output');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should execute separate processes for different commands or different directory or different path', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'output',
+        stderr: ''
+      });
+
+      await getCommandOutput('command-one', '/dir-a');
+      await getCommandOutput('command-two', '/dir-a');
+      await getCommandOutput('command-one', '/dir-b');
+
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it('should clear the cache and execute again when resetCommandOutputCache is called', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'output',
+        stderr: ''
+      });
+
+      await getCommandOutput('test-command', '/dir');
+      await getCommandOutput('test-command', '/dir');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+      resetCommandOutputCache();
+
+      await getCommandOutput('test-command', '/dir');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should evict the promise from the cache if execution fails', async () => {
+      getExecOutputSpy
+        .mockResolvedValueOnce({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'some-failure'
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: 'success',
+          stderr: ''
+        });
+
+      await expect(getCommandOutput('fail-then-pass')).rejects.toThrow(
+        'some-failure'
+      );
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+      // Subsequent call should try again (not cached the failure permanently)
+      const res = await getCommandOutput('fail-then-pass');
+      expect(res).toBe('success');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

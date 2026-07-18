@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import * as exec from '@actions/exec';
 import * as cache from '@actions/cache';
 import path from 'path';
 import * as utils from '../src/cache-utils';
@@ -68,6 +69,79 @@ describe('cache-utils', () => {
       await expect(utils.getPackageManagerInfo(packageManager)).resolves.toBe(
         result
       );
+    });
+  });
+
+  describe('getCommandOutput Memoization', () => {
+    let execGetExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      utils.resetCommandOutputCache();
+      // Restore the outer spy so it doesn't intercept calls to getCommandOutput
+      getCommandOutputSpy.mockRestore();
+      // Ensure we mock the underlying exec.getExecOutput
+      execGetExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      execGetExecOutputSpy.mockRestore();
+      // Re-create the outer spy for other tests
+      getCommandOutputSpy = jest.spyOn(utils, 'getCommandOutput');
+    });
+
+    it('returns the same Promise and only spawns the process once for concurrent and subsequent calls with same args', async () => {
+      execGetExecOutputSpy.mockResolvedValue({
+        stdout: 'v20.0.0\n',
+        stderr: '',
+        exitCode: 0
+      });
+
+      const p1 = utils.getCommandOutput('node --version');
+      const p2 = utils.getCommandOutput('node --version');
+      expect(p1).toBe(p2); // check promise identity
+
+      const val1 = await p1;
+      const val2 = await p2;
+      expect(val1).toBe('v20.0.0');
+      expect(val2).toBe('v20.0.0');
+
+      const val3 = await utils.getCommandOutput('node --version');
+      expect(val3).toBe('v20.0.0');
+
+      expect(execGetExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('removes failed promises from the cache to prevent caching permanent errors', async () => {
+      execGetExecOutputSpy.mockRejectedValueOnce(new Error('Process execution failed'));
+
+      await expect(utils.getCommandOutput('node --version')).rejects.toThrow('Process execution failed');
+
+      // Subsequent call should spawn the command again
+      execGetExecOutputSpy.mockResolvedValueOnce({
+        stdout: 'v20.0.0\n',
+        stderr: '',
+        exitCode: 0
+      });
+
+      const res = await utils.getCommandOutput('node --version');
+      expect(res).toBe('v20.0.0');
+      expect(execGetExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('successful invocation of resetCommandOutputCache empties the cache', async () => {
+      execGetExecOutputSpy.mockResolvedValue({
+        stdout: 'v20.0.0\n',
+        stderr: '',
+        exitCode: 0
+      });
+
+      await utils.getCommandOutput('node --version');
+      expect(execGetExecOutputSpy).toHaveBeenCalledTimes(1);
+
+      utils.resetCommandOutputCache();
+
+      await utils.getCommandOutput('node --version');
+      expect(execGetExecOutputSpy).toHaveBeenCalledTimes(2);
     });
   });
 

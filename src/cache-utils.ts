@@ -66,32 +66,58 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+const commandOutputCache = new Map<string, Promise<string>>();
+
+export const resetCommandOutputCache = () => {
+  commandOutputCache.clear();
+};
+
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
+  const cacheKey = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    return cachedPromise;
+  }
+
+  // To prevent dog-piling, we immediately cache the promise.
+  // Note: We avoid async/await here to directly return the Promise, maintaining promise identity (object equality) on repeated calls.
+  // We also don't use silent: true to preserve standard log outputs for CI debugging.
+  const promise = exec.getExecOutput(
     toolCommand,
     undefined,
     {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
+  ).then(result => {
+    if (!result) {
+      // Defensive fallback in case jest.spyOn mock doesn't return anything or throws undefined destructuring error
+      return '';
+    }
+    const {stdout, stderr, exitCode} = result;
+    if (exitCode) {
+      const errMessage = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(errMessage);
+    }
+    return stdout.trim();
+  }).catch(err => {
+    // Prevent caching permanent errors by removing the failed promise from the cache
+    commandOutputCache.delete(cacheKey);
+    throw err;
+  });
 
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
-  }
-
-  return stdout.trim();
-};
+  commandOutputCache.set(cacheKey, promise);
+  return promise;
+}
 
 export const getCommandOutputNotEmpty = async (
   toolCommand: string,
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

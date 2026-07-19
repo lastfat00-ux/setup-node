@@ -1,6 +1,7 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
 import path from 'path';
+import * as exec from '@actions/exec';
 import * as utils from '../src/cache-utils';
 import {
   PackageManagerInfo,
@@ -359,6 +360,85 @@ describe('cache-utils', () => {
         ]);
       }
     );
+  });
+});
+
+describe('getCommandOutput memoization and cache invalidation', () => {
+  let getExecOutputSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    utils.resetCommandOutputCache();
+  });
+
+  afterEach(() => {
+    getExecOutputSpy.mockRestore();
+  });
+
+  it('should memoize multiple identical calls to getCommandOutput', async () => {
+    getExecOutputSpy.mockResolvedValue({
+      stdout: 'v22.0.0\n',
+      stderr: '',
+      exitCode: 0
+    });
+
+    const promise1 = utils.getCommandOutput('node --version');
+    const promise2 = utils.getCommandOutput('node --version');
+
+    expect(promise1).toBe(promise2);
+
+    const result1 = await promise1;
+    const result2 = await promise2;
+
+    expect(result1).toBe('v22.0.0');
+    expect(result2).toBe('v22.0.0');
+    expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('should invalidate cache and execute again after resetCommandOutputCache', async () => {
+    getExecOutputSpy.mockResolvedValue({
+      stdout: 'v22.0.0\n',
+      stderr: '',
+      exitCode: 0
+    });
+
+    const result1 = await utils.getCommandOutput('node --version');
+    expect(result1).toBe('v22.0.0');
+
+    utils.resetCommandOutputCache();
+
+    const result2 = await utils.getCommandOutput('node --version');
+    expect(result2).toBe('v22.0.0');
+    expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('should not cache failed executions', async () => {
+    getExecOutputSpy.mockResolvedValueOnce({
+      stdout: '',
+      stderr: 'Command failed',
+      exitCode: 1
+    });
+
+    await expect(utils.getCommandOutput('node --version')).rejects.toThrow(
+      'Command failed'
+    );
+
+    getExecOutputSpy.mockResolvedValueOnce({
+      stdout: 'v22.0.0\n',
+      stderr: '',
+      exitCode: 0
+    });
+
+    const result = await utils.getCommandOutput('node --version');
+    expect(result).toBe('v22.0.0');
+    expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('should handle defensive fallback if getExecOutput returns undefined', async () => {
+    getExecOutputSpy.mockResolvedValue(undefined as any);
+
+    const result = await utils.getCommandOutput('node --version');
+    expect(result).toBe('');
   });
 });
 

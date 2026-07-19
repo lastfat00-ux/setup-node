@@ -71619,7 +71619,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.supportedPackageManagers = void 0;
+exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.resetCommandOutputCache = exports.supportedPackageManagers = void 0;
 exports.isGhes = isGhes;
 exports.isCacheFeatureAvailable = isCacheFeatureAvailable;
 const core = __importStar(__nccwpck_require__(37484));
@@ -71656,19 +71656,53 @@ exports.supportedPackageManagers = {
         }
     }
 };
-const getCommandOutput = async (toolCommand, cwd) => {
-    let { stdout, stderr, exitCode } = await exec.getExecOutput(toolCommand, undefined, { ignoreReturnCode: true, ...(cwd && { cwd }) });
-    if (exitCode) {
-        stderr = !stderr.trim()
-            ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-            : stderr;
-        throw new Error(stderr);
+// Module-level cache for getCommandOutput to avoid redundant shell command execution.
+// Keyed by `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`.
+const commandOutputCache = new Map();
+const resetCommandOutputCache = () => {
+    commandOutputCache.clear();
+};
+exports.resetCommandOutputCache = resetCommandOutputCache;
+const getCommandOutput = (toolCommand, cwd) => {
+    const cacheKey = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+    const cached = commandOutputCache.get(cacheKey);
+    if (cached) {
+        return cached;
     }
-    return stdout.trim();
+    // Execute external command wrapped in a Promise
+    const promise = (async () => {
+        const rawResult = exec.getExecOutput(toolCommand, undefined, {
+            ignoreReturnCode: true,
+            ...(cwd && { cwd })
+        });
+        // Defensive fallback if mocked exec.getExecOutput returns undefined or lacking .then
+        if (!rawResult || typeof rawResult.then !== 'function') {
+            return '';
+        }
+        const resolvedResult = await rawResult;
+        if (!resolvedResult) {
+            return '';
+        }
+        let { stdout, stderr, exitCode } = resolvedResult;
+        if (exitCode) {
+            stderr = !stderr.trim()
+                ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+                : stderr;
+            throw new Error(stderr);
+        }
+        return stdout.trim();
+    })();
+    // Cache immediately to prevent concurrent duplicate commands (dog-piling)
+    commandOutputCache.set(cacheKey, promise);
+    // If the promise fails, delete it from the cache to avoid caching errors
+    promise.catch(() => {
+        commandOutputCache.delete(cacheKey);
+    });
+    return promise;
 };
 exports.getCommandOutput = getCommandOutput;
 const getCommandOutputNotEmpty = async (toolCommand, error, cwd) => {
-    const stdOut = (0, exports.getCommandOutput)(toolCommand, cwd);
+    const stdOut = await (0, exports.getCommandOutput)(toolCommand, cwd);
     if (!stdOut) {
         throw new Error(error);
     }

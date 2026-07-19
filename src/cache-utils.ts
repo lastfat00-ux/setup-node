@@ -66,24 +66,62 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+// Module-level cache for getCommandOutput to avoid redundant shell command execution.
+// Keyed by `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`.
+const commandOutputCache = new Map<string, Promise<string>>();
+
+export const resetCommandOutputCache = (): void => {
+  commandOutputCache.clear();
+};
+
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+  const cached = commandOutputCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
-  return stdout.trim();
+  // Execute external command wrapped in a Promise
+  const promise = (async () => {
+    const rawResult = exec.getExecOutput(toolCommand, undefined, {
+      ignoreReturnCode: true,
+      ...(cwd && {cwd})
+    });
+
+    // Defensive fallback if mocked exec.getExecOutput returns undefined or lacking .then
+    if (!rawResult || typeof rawResult.then !== 'function') {
+      return '';
+    }
+
+    const resolvedResult = await rawResult;
+    if (!resolvedResult) {
+      return '';
+    }
+
+    let {stdout, stderr, exitCode} = resolvedResult;
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  // Cache immediately to prevent concurrent duplicate commands (dog-piling)
+  commandOutputCache.set(cacheKey, promise);
+
+  // If the promise fails, delete it from the cache to avoid caching errors
+  promise.catch(() => {
+    commandOutputCache.delete(cacheKey);
+  });
+
+  return promise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +129,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

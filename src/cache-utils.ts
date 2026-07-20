@@ -66,24 +66,68 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * Resets the cached command outputs. Useful for testing.
+ */
+export const resetCommandOutputCache = (): void => {
+  commandOutputCache.clear();
+};
+
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}\0${cwd || ''}\0${process.env.PATH || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  // Performance Argument: Memoizing external command results in a module-level Map
+  // avoids redundant, expensive shell command invocations. In monorepos, commands
+  // like 'yarn --version' are called repeatedly, and caching the Promise immediately
+  // prevents 'dog-piling' (concurrent processes spawning for the same command).
+  const promise = (async () => {
+    const result = await exec.getExecOutput(
+      toolCommand,
+      undefined,
+      {ignoreReturnCode: true, ...(cwd && {cwd})}
+    );
+
+    if (!result) {
+      return '';
+    }
+
+    let stdout, stderr, exitCode;
+    try {
+      ({stdout, stderr, exitCode} = result);
+    } catch (e) {
+      if (e instanceof TypeError) {
+        return '';
+      }
+      throw e;
+    }
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  const wrappedPromise = promise.catch(err => {
+    // Prevent caching permanent errors
+    commandOutputCache.delete(cacheKey);
+    throw err;
+  });
+
+  commandOutputCache.set(cacheKey, wrappedPromise);
+  return wrappedPromise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +135,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

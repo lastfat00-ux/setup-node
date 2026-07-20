@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import * as exec from '@actions/exec';
 import * as cache from '@actions/cache';
 import path from 'path';
 import * as utils from '../src/cache-utils';
@@ -102,6 +103,98 @@ describe('cache-utils', () => {
     jest.clearAllMocks();
   });
 
+  describe('getCommandOutput memoization', () => {
+    beforeEach(() => {
+      getCommandOutputSpy.mockRestore();
+      utils.resetCommandOutputCache();
+    });
+
+    it('should memoize subsequent calls to getCommandOutput with the same command and directory', async () => {
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.0.0',
+        stderr: ''
+      });
+
+      const promise1 = utils.getCommandOutput('yarn --version', '/some/dir');
+      const promise2 = utils.getCommandOutput('yarn --version', '/some/dir');
+
+      expect(promise1).toBe(promise2); // Identical promise reference to prevent dog-piling
+
+      const result1 = await promise1;
+      const result2 = await promise2;
+
+      expect(result1).toBe('v1.0.0');
+      expect(result2).toBe('v1.0.0');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+      getExecOutputSpy.mockRestore();
+    });
+
+    it('should bypass cache when directories or commands are different', async () => {
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.0.0',
+        stderr: ''
+      });
+
+      const promise1 = utils.getCommandOutput('yarn --version', '/dir1');
+      const promise2 = utils.getCommandOutput('yarn --version', '/dir2');
+
+      expect(promise1).not.toBe(promise2);
+
+      await promise1;
+      await promise2;
+
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+
+      getExecOutputSpy.mockRestore();
+    });
+
+    it('should delete key from cache and allow retry if a command fails', async () => {
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockRejectedValue(new Error('Process failed'));
+
+      const outputPromise = utils.getCommandOutput('yarn --version', '/dir1');
+      await expect(outputPromise).rejects.toThrow('Process failed');
+
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.0.0',
+        stderr: ''
+      });
+
+      const output = await utils.getCommandOutput('yarn --version', '/dir1');
+      expect(output).toBe('v1.0.0');
+
+      getExecOutputSpy.mockRestore();
+    });
+
+    it('should clear the cache when resetCommandOutputCache is called', async () => {
+      const getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.0.0',
+        stderr: ''
+      });
+
+      const p1 = utils.getCommandOutput('yarn --version', '/dir1');
+      await p1;
+
+      utils.resetCommandOutputCache();
+
+      const p2 = utils.getCommandOutput('yarn --version', '/dir1');
+      expect(p1).not.toBe(p2);
+
+      await p2;
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+
+      getExecOutputSpy.mockRestore();
+    });
+  });
+
   describe('getCacheDirectoriesPaths', () => {
     let existsSpy: jest.SpyInstance;
     let lstatSpy: jest.SpyInstance;
@@ -124,6 +217,7 @@ describe('cache-utils', () => {
       );
 
       resetProjectDirectoriesMemoized();
+      utils.resetCommandOutputCache();
     });
 
     afterEach(() => {

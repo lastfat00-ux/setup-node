@@ -7,10 +7,12 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
+import * as exec from '@actions/exec';
 import * as glob from '@actions/glob';
 import {Globber} from '@actions/glob';
 import {MockGlobber} from './mock/glob-mock';
@@ -54,6 +56,97 @@ describe('cache-utils', () => {
     console.log('::stoptoken::');
     jest.restoreAllMocks();
   }, 100000);
+
+  describe('getCommandOutput memoization and cache management', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      // Restore top-level getCommandOutput spy so we run the actual implementation
+      getCommandOutputSpy.mockRestore();
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      resetCommandOutputCache();
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+    });
+
+    it('should memoize multiple calls with the same command and directory', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'test-output',
+        stderr: ''
+      });
+
+      const res1 = await utils.getCommandOutput('some-command', 'some-dir');
+      const res2 = await utils.getCommandOutput('some-command', 'some-dir');
+
+      expect(res1).toBe('test-output');
+      expect(res2).toBe('test-output');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should prevent dog-piling by sharing the exact same Promise instance for concurrent calls', async () => {
+      let resolvePromise: (value: any) => void = () => {};
+      const promise = new Promise<any>(resolve => {
+        resolvePromise = resolve;
+      });
+
+      getExecOutputSpy.mockImplementation(() => promise);
+
+      const p1 = utils.getCommandOutput('concurrent-command', 'some-dir');
+      const p2 = utils.getCommandOutput('concurrent-command', 'some-dir');
+
+      expect(p1).toBe(p2); // identity check
+
+      resolvePromise({
+        exitCode: 0,
+        stdout: 'concurrent-output',
+        stderr: ''
+      });
+
+      const res1 = await p1;
+      const res2 = await p2;
+
+      expect(res1).toBe('concurrent-output');
+      expect(res2).toBe('concurrent-output');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should delete key from cache if command execution fails', async () => {
+      getExecOutputSpy.mockResolvedValueOnce({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'error'
+      });
+
+      await expect(utils.getCommandOutput('failing-command')).rejects.toThrow('error');
+
+      getExecOutputSpy.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: 'success',
+        stderr: ''
+      });
+
+      const res = await utils.getCommandOutput('failing-command');
+      expect(res).toBe('success');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should invalidate cache when resetCommandOutputCache is called', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'output',
+        stderr: ''
+      });
+
+      await utils.getCommandOutput('command');
+      resetCommandOutputCache();
+      await utils.getCommandOutput('command');
+
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+  });
 
   describe('getPackageManagerInfo', () => {
     it.each<[string, PackageManagerInfo | null]>([

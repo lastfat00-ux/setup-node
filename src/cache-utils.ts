@@ -66,24 +66,48 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+// Module-level cache Map for getCommandOutput results.
+// Delimited key with null characters protects against parameter boundaries overlap.
+const commandOutputCache = new Map<string, Promise<string>>();
+
+export const resetCommandOutputCache = () => {
+  commandOutputCache.clear();
+};
+
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}\0${cwd || ''}\0${process.env.PATH || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  const executionPromise = (async () => {
+    let {stdout, stderr, exitCode} = await exec.getExecOutput(
+      toolCommand,
+      undefined,
+      {ignoreReturnCode: true, ...(cwd && {cwd})}
+    );
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  // Catch block to immediately delete from cache on failure so we don't cache permanent errors.
+  executionPromise.catch(() => {
+    commandOutputCache.delete(cacheKey);
+  });
+
+  commandOutputCache.set(cacheKey, executionPromise);
+  return executionPromise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +115,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

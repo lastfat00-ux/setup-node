@@ -7,9 +7,11 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
+import * as exec from '@actions/exec';
 import * as cacheUtils from '../src/cache-utils';
 import * as glob from '@actions/glob';
 import {Globber} from '@actions/glob';
@@ -397,5 +399,94 @@ describe('isGhes', () => {
   it('returns true when the GITHUB_SERVER_URL environment variable is set to some other URL', () => {
     process.env['GITHUB_SERVER_URL'] = 'https://src.onpremise.fabrikam.com';
     expect(isGhes()).toBeTruthy();
+  });
+});
+
+describe('getCommandOutput memoization', () => {
+  let execOutputSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    // Restore spyOn(utils, 'getCommandOutput') so we test actual implementation
+    // Jest provides mockRestore on spies
+    resetCommandOutputCache();
+    execOutputSpy = jest.spyOn(exec, 'getExecOutput');
+  });
+
+  afterEach(() => {
+    resetCommandOutputCache();
+    execOutputSpy.mockRestore();
+  });
+
+  it('should cache successful command outputs', async () => {
+    execOutputSpy.mockResolvedValue({
+      exitCode: 0,
+      stdout: 'test-output',
+      stderr: ''
+    });
+
+    const res1 = await utils.getCommandOutput('some command');
+    const res2 = await utils.getCommandOutput('some command');
+
+    expect(res1).toBe('test-output');
+    expect(res2).toBe('test-output');
+    expect(execOutputSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('should return the same Promise reference for concurrent calls', () => {
+    execOutputSpy.mockResolvedValue({
+      exitCode: 0,
+      stdout: 'test-output',
+      stderr: ''
+    });
+
+    const p1 = utils.getCommandOutput('some command');
+    const p2 = utils.getCommandOutput('some command');
+
+    expect(p1).toBe(p2);
+  });
+
+  it('should not cache failed command outputs', async () => {
+    execOutputSpy.mockResolvedValueOnce({
+      exitCode: 1,
+      stdout: '',
+      stderr: 'some error'
+    }).mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: 'success-after-failure',
+      stderr: ''
+    });
+
+    await expect(utils.getCommandOutput('failing command')).rejects.toThrow('some error');
+
+    const res = await utils.getCommandOutput('failing command');
+    expect(res).toBe('success-after-failure');
+    expect(execOutputSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('should isolate cache based on command, cwd and PATH', async () => {
+    execOutputSpy.mockResolvedValue({
+      exitCode: 0,
+      stdout: 'output',
+      stderr: ''
+    });
+
+    await utils.getCommandOutput('cmd', 'dir1');
+    await utils.getCommandOutput('cmd', 'dir2');
+
+    expect(execOutputSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('should reset cache via resetCommandOutputCache', async () => {
+    execOutputSpy.mockResolvedValue({
+      exitCode: 0,
+      stdout: 'output',
+      stderr: ''
+    });
+
+    await utils.getCommandOutput('cmd');
+    resetCommandOutputCache();
+    await utils.getCommandOutput('cmd');
+
+    expect(execOutputSpy).toHaveBeenCalledTimes(2);
   });
 });

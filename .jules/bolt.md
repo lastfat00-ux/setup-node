@@ -5,3 +5,11 @@
 ## 2025-05-15 - [Cleanup after Install]
 **Learning:** Running `pnpm install` can create a lockfile (like `pnpm-lock.yaml`) if it doesn't exist, which should not be committed unless requested.
 **Action:** Always check for and remove any auto-generated lockfiles or temporary scripts before submission.
+
+## 2025-05-15 - [Promise Identity and CommonJS Spying in TypeScript]
+**Learning:** To maintain correct promise identity (object equality) and avoid wrapping the cached promise in a new instance on every call, avoid the `async` keyword on the outer cached function signature. Also, in TypeScript compiled to CommonJS, internal calls bypass Jest spies if using `export function`, whereas `export const` forces calls through the exports object for correct spying.
+**Action:** Use `export const` and return the Promise directly without the `async` keyword at the function signature.
+
+## 2025-05-15 - [Defensive Mock Fallbacks in Utility Wrappers]
+**Learning:** When adding caching or layers over standard library execution tools, test suites that mock these tools using generic spies (e.g. `jest.spyOn`) can return `undefined` or lack a `.then` function, causing crashes.
+**Action:** Implement a defensive fallback check in the wrapper to return a safe empty string or resolved promise.

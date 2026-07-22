@@ -66,32 +66,85 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+// Module-level cache Map for external shell command results.
+// Utilizing a Map keyed by the command, cwd, and PATH variables
+// separated by null delimiters to ensure robust key isolation.
+// Declared as const to adhere to preferred linting and style guidelines.
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * Resets the command output cache to ensure test isolation
+ * and proper cache eviction.
+ */
+export const resetCommandOutputCache = (): void => {
+  commandOutputCache.clear();
+};
+
+/**
+ * Executes a tool command and returns its trimmed stdout.
+ * Results are cached immediately (using Promise objects) to prevent
+ * dog-piling and redundant process executions.
+ *
+ * Performance impact: Reduces execution overhead of repeated commands (e.g. yarn --version)
+ * in monorepos by caching process results, avoiding costly process spawns.
+ *
+ * This function returns Promise directly without using 'async' signature to ensure
+ * promise identity (object equality) on subsequent calls.
+ */
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}\0${cwd || ''}\0${process.env.PATH || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  const promise = (async () => {
+    const execResult = await exec.getExecOutput(
+      toolCommand,
+      undefined,
+      {ignoreReturnCode: true, ...(cwd && {cwd})}
+    );
+
+    // Defensive fallback: If test mocks/spies do not handle the command and return undefined,
+    // prevent destructuring errors or promise crashes by returning empty string.
+    if (!execResult) {
+      return '';
+    }
+
+    let {stdout, stderr, exitCode} = execResult;
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  // Prevent caching permanent/temporary command execution errors by removing failed promises.
+  promise.catch(() => {
+    commandOutputCache.delete(cacheKey);
+  });
+
+  commandOutputCache.set(cacheKey, promise);
+  return promise;
 };
 
+/**
+ * Helper that ensures the retrieved command output is not empty.
+ * Explicitly awaits getCommandOutput to correctly check the resolved string.
+ */
 export const getCommandOutputNotEmpty = async (
   toolCommand: string,
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

@@ -66,24 +66,50 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+const commandOutputCache = new Map<string, Promise<string>>();
+
+export const resetCommandOutputCache = () => {
+  commandOutputCache.clear();
+};
+
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
+  const cacheKey = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+  const cached = commandOutputCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  // To maintain proper promise identity and avoid wrapping via async signatures,
+  // we return the Promise directly and immediately cache it.
+  const promise = exec.getExecOutput(
     toolCommand,
     undefined,
     {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
+  ).then((result) => {
+    // If result is undefined (defensive fallback for mocked implementations in tests)
+    if (!result) {
+      return '';
+    }
 
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
-  }
+    let {stdout, stderr, exitCode} = result;
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+    return stdout.trim();
+  }).catch((err) => {
+    // Evict failed promise from the cache so temporary failures aren't persisted permanently.
+    commandOutputCache.delete(cacheKey);
+    throw err;
+  });
 
-  return stdout.trim();
+  commandOutputCache.set(cacheKey, promise);
+  return promise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +117,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

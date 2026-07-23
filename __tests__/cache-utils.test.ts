@@ -11,6 +11,7 @@ import {
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
+import * as exec from '@actions/exec';
 import * as glob from '@actions/glob';
 import {Globber} from '@actions/glob';
 import {MockGlobber} from './mock/glob-mock';
@@ -54,6 +55,76 @@ describe('cache-utils', () => {
     console.log('::stoptoken::');
     jest.restoreAllMocks();
   }, 100000);
+
+  describe('getCommandOutput memoization', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      getCommandOutputSpy.mockRestore();
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      utils.resetCommandOutputCache();
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+    });
+
+    it('should memoize command outputs and reuse the same Promise for identical requests', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'v18.0.0\n',
+        stderr: '',
+        exitCode: 0
+      });
+
+      // Call it multiple times with the same command
+      const promise1 = utils.getCommandOutput('node --version');
+      const promise2 = utils.getCommandOutput('node --version');
+
+      // They should return the exact same promise instance (identity check)
+      expect(promise1).toBe(promise2);
+
+      const result1 = await promise1;
+      const result2 = await promise2;
+
+      expect(result1).toBe('v18.0.0');
+      expect(result2).toBe('v18.0.0');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should evict failed command output promises from the cache', async () => {
+      getExecOutputSpy.mockRejectedValueOnce(new Error('Spawn error'));
+      getExecOutputSpy.mockResolvedValueOnce({
+        stdout: 'v18.0.0\n',
+        stderr: '',
+        exitCode: 0
+      });
+
+      // First call fails
+      await expect(utils.getCommandOutput('node --version')).rejects.toThrow('Spawn error');
+
+      // Second call should invoke exec.getExecOutput again because it was evicted on failure
+      const result = await utils.getCommandOutput('node --version');
+      expect(result).toBe('v18.0.0');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should invalidate cache when resetCommandOutputCache is called', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'v18.0.0\n',
+        stderr: '',
+        exitCode: 0
+      });
+
+      const result1 = await utils.getCommandOutput('node --version');
+      expect(result1).toBe('v18.0.0');
+
+      utils.resetCommandOutputCache();
+
+      const result2 = await utils.getCommandOutput('node --version');
+      expect(result2).toBe('v18.0.0');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+  });
 
   describe('getPackageManagerInfo', () => {
     it.each<[string, PackageManagerInfo | null]>([

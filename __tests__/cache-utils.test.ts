@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
 import {
@@ -10,7 +11,7 @@ import {
   resetProjectDirectoriesMemoized
 } from '../src/cache-utils';
 import fs from 'fs';
-import * as cacheUtils from '../src/cache-utils';
+
 import * as glob from '@actions/glob';
 import {Globber} from '@actions/glob';
 import {MockGlobber} from './mock/glob-mock';
@@ -144,7 +145,7 @@ describe('cache-utils', () => {
       async (packageManagerInfo, cacheDependency) => {
         getCommandOutputSpy.mockImplementation(() => 'foo');
 
-        const dirs = await cacheUtils.getCacheDirectories(
+        const dirs = await utils.getCacheDirectories(
           packageManagerInfo,
           cacheDependency
         );
@@ -158,7 +159,7 @@ describe('cache-utils', () => {
     it('getCacheDirectoriesPaths should return one dir for yarn without cacheDependency', async () => {
       getCommandOutputSpy.mockImplementation(() => 'foo');
 
-      const dirs = await cacheUtils.getCacheDirectories(
+      const dirs = await utils.getCacheDirectories(
         supportedPackageManagers.yarn,
         ''
       );
@@ -185,7 +186,7 @@ describe('cache-utils', () => {
         );
 
         await expect(
-          cacheUtils.getCacheDirectories(packageManagerInfo, cacheDependency)
+          utils.getCacheDirectories(packageManagerInfo, cacheDependency)
         ).rejects.toThrow(); //'Could not get cache folder path for /dir');
       }
     );
@@ -200,7 +201,7 @@ describe('cache-utils', () => {
           isDirectory: () => false
         }));
 
-        await cacheUtils.getCacheDirectories(
+        await utils.getCacheDirectories(
           packageManagerInfo,
           cacheDependency
         );
@@ -217,7 +218,7 @@ describe('cache-utils', () => {
         getCommandOutputSpy.mockImplementationOnce(() => version);
         getCommandOutputSpy.mockImplementationOnce(() => `foo${version}`);
 
-        const dirs = await cacheUtils.getCacheDirectories(
+        const dirs = await utils.getCacheDirectories(
           supportedPackageManagers.yarn,
           ''
         );
@@ -237,7 +238,7 @@ describe('cache-utils', () => {
             MockGlobber.create(['/tmp/dir1/file', '/tmp/dir2/file'])
         );
 
-        const dirs = await cacheUtils.getCacheDirectories(
+        const dirs = await utils.getCacheDirectories(
           supportedPackageManagers.yarn,
           '/tmp/**/file'
         );
@@ -261,7 +262,7 @@ describe('cache-utils', () => {
             ])
         );
 
-        const dirs = await cacheUtils.getCacheDirectories(
+        const dirs = await utils.getCacheDirectories(
           supportedPackageManagers.yarn,
           '/tmp/**/file'
         );
@@ -287,7 +288,7 @@ describe('cache-utils', () => {
             ])
         );
 
-        const dirs = await cacheUtils.getCacheDirectories(
+        const dirs = await utils.getCacheDirectories(
           supportedPackageManagers.yarn,
           '/tmp/**/file'
         );
@@ -347,7 +348,7 @@ describe('cache-utils', () => {
         getCommandOutputSpy.mockImplementation((command: string) =>
           command.includes('version') ? version : `file_${version}_${dirNo++}`
         );
-        const dirs = await cacheUtils.getCacheDirectories(
+        const dirs = await utils.getCacheDirectories(
           supportedPackageManagers.yarn,
           cacheDependencyPath
         );
@@ -359,6 +360,92 @@ describe('cache-utils', () => {
         ]);
       }
     );
+  });
+
+  describe('getCommandOutput memoization', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+    beforeEach(() => {
+      // Restore the spy on utils.getCommandOutput so we test the actual function
+      getCommandOutputSpy.mockRestore();
+      utils.resetCommandOutputCache();
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+      utils.resetCommandOutputCache();
+    });
+
+    it('should memoize command outputs based on command, cwd and PATH', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.0.0',
+        stderr: ''
+      });
+
+      const res1 = await utils.getCommandOutput('node --version');
+      const res2 = await utils.getCommandOutput('node --version');
+
+      expect(res1).toBe('v1.0.0');
+      expect(res2).toBe('v1.0.0');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should prevent dog-piling by returning the same promise for concurrent calls', async () => {
+      let resolvePromise: any;
+      const deferred = new Promise<any>(resolve => {
+        resolvePromise = resolve;
+      });
+      getExecOutputSpy.mockReturnValue(deferred);
+
+      const p1 = utils.getCommandOutput('node --version');
+      const p2 = utils.getCommandOutput('node --version');
+
+      expect(p1).toBe(p2); // strict equality (same Promise object)
+
+      resolvePromise({
+        exitCode: 0,
+        stdout: 'v2.0.0',
+        stderr: ''
+      });
+
+      await expect(p1).resolves.toBe('v2.0.0');
+      await expect(p2).resolves.toBe('v2.0.0');
+    });
+
+    it('should remove failed command executions from cache', async () => {
+      getExecOutputSpy.mockResolvedValueOnce({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'error'
+      });
+
+      await expect(utils.getCommandOutput('node --version')).rejects.toThrow();
+
+      getExecOutputSpy.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: 'success',
+        stderr: ''
+      });
+
+      const res = await utils.getCommandOutput('node --version');
+      expect(res).toBe('success');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should clear cache on resetCommandOutputCache', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'output',
+        stderr: ''
+      });
+
+      await utils.getCommandOutput('node --version');
+      utils.resetCommandOutputCache();
+      await utils.getCommandOutput('node --version');
+
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

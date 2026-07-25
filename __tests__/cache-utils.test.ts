@@ -55,6 +55,71 @@ describe('cache-utils', () => {
     jest.restoreAllMocks();
   }, 100000);
 
+  describe('getCommandOutput caching', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+    let mockOutput: {stdout: string; stderr: string; exitCode: number};
+
+    beforeEach(() => {
+      // Restore the main file's spy on getCommandOutput so we can test the real function's caching behavior
+      getCommandOutputSpy.mockRestore();
+
+      const execModule = jest.requireActual('@actions/exec');
+      mockOutput = {stdout: 'some version', stderr: '', exitCode: 0};
+      getExecOutputSpy = jest.spyOn(execModule, 'getExecOutput');
+      getExecOutputSpy.mockImplementation(() => Promise.resolve(mockOutput));
+      utils.resetCommandOutputCache();
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+      // Re-apply the main file's spy on getCommandOutput for other tests
+      getCommandOutputSpy = jest.spyOn(utils, 'getCommandOutput');
+    });
+
+    it('caches successive calls to getCommandOutput', async () => {
+      const command = 'node --version';
+      const output1 = await utils.getCommandOutput(command);
+      const output2 = await utils.getCommandOutput(command);
+
+      expect(output1).toBe('some version');
+      expect(output2).toBe('some version');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('correctly uses the cache for different directories', async () => {
+      const command = 'node --version';
+      const output1 = await utils.getCommandOutput(command, 'dir1');
+      const output2 = await utils.getCommandOutput(command, 'dir2');
+      const output3 = await utils.getCommandOutput(command, 'dir1');
+
+      expect(output1).toBe('some version');
+      expect(output2).toBe('some version');
+      expect(output3).toBe('some version');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('invalidates cache when resetCommandOutputCache is called', async () => {
+      const command = 'node --version';
+      await utils.getCommandOutput(command);
+      utils.resetCommandOutputCache();
+      await utils.getCommandOutput(command);
+
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('handles failures by not caching them permanently', async () => {
+      const command = 'failing command';
+      mockOutput.exitCode = 1;
+      mockOutput.stderr = 'An error occurred';
+
+      await expect(utils.getCommandOutput(command)).rejects.toThrow('An error occurred');
+
+      // Try again and it should call getExecOutput again because it should not have cached the failure
+      await expect(utils.getCommandOutput(command)).rejects.toThrow('An error occurred');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('getPackageManagerInfo', () => {
     it.each<[string, PackageManagerInfo | null]>([
       ['npm', utils.supportedPackageManagers.npm],

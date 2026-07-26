@@ -71619,7 +71619,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.supportedPackageManagers = void 0;
+exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.resetCommandOutputCache = exports.supportedPackageManagers = void 0;
 exports.isGhes = isGhes;
 exports.isCacheFeatureAvailable = isCacheFeatureAvailable;
 const core = __importStar(__nccwpck_require__(37484));
@@ -71656,19 +71656,60 @@ exports.supportedPackageManagers = {
         }
     }
 };
-const getCommandOutput = async (toolCommand, cwd) => {
-    let { stdout, stderr, exitCode } = await exec.getExecOutput(toolCommand, undefined, { ignoreReturnCode: true, ...(cwd && { cwd }) });
-    if (exitCode) {
-        stderr = !stderr.trim()
-            ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-            : stderr;
-        throw new Error(stderr);
+// Memoization cache for external shell command results to prevent redundant process spawns.
+// Using 'const' to satisfy prefer-const rule.
+const commandOutputCache = new Map();
+/**
+ * Reset the memoized shell command execution cache.
+ * Useful for test isolation to ensure fresh lookups across test cases.
+ */
+const resetCommandOutputCache = () => {
+    commandOutputCache.clear();
+};
+exports.resetCommandOutputCache = resetCommandOutputCache;
+/**
+ * Returns the stdout of a command execution. Results are memoized based on the command,
+ * current working directory, and PATH environment variable to prevent redundant child processes,
+ * especially in monorepo setups where commands like 'yarn config get' are executed repeatedly.
+ *
+ * NOTE: Outer function does not use the 'async' keyword in its signature to prevent the
+ * JS runtime from wrapping the cached Promise in a new Promise instance, preserving promise identity.
+ */
+const getCommandOutput = (toolCommand, cwd) => {
+    // Use null character '\0' as a delimiter to prevent path-command collisions.
+    const key = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+    const cachedPromise = commandOutputCache.get(key);
+    if (cachedPromise) {
+        return cachedPromise;
     }
-    return stdout.trim();
+    // Create and cache the Promise immediately to avoid 'dog-piling' / race conditions
+    // when multiple concurrent lookups happen before the process resolves.
+    const promise = (async () => {
+        const execOutputPromise = exec.getExecOutput(toolCommand, undefined, { ignoreReturnCode: true, ...(cwd && { cwd }) });
+        // Defensive fallback: If mock implementations of exec.getExecOutput return undefined,
+        // prevent crashes by returning a resolved empty string.
+        if (!execOutputPromise || typeof execOutputPromise.then !== 'function') {
+            return '';
+        }
+        let { stdout, stderr, exitCode } = await execOutputPromise;
+        if (exitCode) {
+            stderr = !stderr.trim()
+                ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+                : stderr;
+            throw new Error(stderr);
+        }
+        return stdout.trim();
+    })();
+    // Prevent caching of transient/permanent errors; invalidate cache on failure.
+    promise.catch(() => {
+        commandOutputCache.delete(key);
+    });
+    commandOutputCache.set(key, promise);
+    return promise;
 };
 exports.getCommandOutput = getCommandOutput;
 const getCommandOutputNotEmpty = async (toolCommand, error, cwd) => {
-    const stdOut = (0, exports.getCommandOutput)(toolCommand, cwd);
+    const stdOut = await (0, exports.getCommandOutput)(toolCommand, cwd);
     if (!stdOut) {
         throw new Error(error);
     }

@@ -11,6 +11,7 @@ import os from 'os';
 import fs from 'fs';
 
 import {NodeInputs, INodeVersion, INodeVersionInfo} from './base-models';
+import {resetCommandOutputCache} from '../cache-utils';
 
 export default abstract class BaseDistribution {
   protected httpClient: hc.HttpClient;
@@ -19,6 +20,7 @@ export default abstract class BaseDistribution {
 
   public static resetCache() {
     BaseDistribution.nodeJsVersionsCache.clear();
+    resetCommandOutputCache();
   }
 
   constructor(protected nodeInfo: NodeInputs) {

@@ -362,6 +362,63 @@ describe('cache-utils', () => {
   });
 });
 
+describe('getCommandOutput memoization', () => {
+  let execSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    // import exec explicitly as standard ES import or mock the module
+    const exec = jest.requireActual('@actions/exec');
+    execSpy = jest
+      .spyOn(exec, 'getExecOutput')
+      .mockImplementation(async commandLine => {
+        if (commandLine === 'fail') {
+          return {stdout: '', stderr: 'error', exitCode: 1};
+        }
+        return {stdout: 'version-1.0', stderr: '', exitCode: 0};
+      });
+    utils.resetCommandOutputCache();
+  });
+
+  afterEach(() => {
+    execSpy.mockRestore();
+  });
+
+  it('memoizes the output of getCommandOutput', async () => {
+    const res1 = await utils.getCommandOutput('node --version');
+    const res2 = await utils.getCommandOutput('node --version');
+
+    expect(res1).toBe('version-1.0');
+    expect(res2).toBe('version-1.0');
+    expect(execSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns exact same Promise reference on concurrent calls', () => {
+    const p1 = utils.getCommandOutput('node --version');
+    const p2 = utils.getCommandOutput('node --version');
+
+    expect(p1).toBe(p2);
+  });
+
+  it('clears cache on resetCommandOutputCache', async () => {
+    await utils.getCommandOutput('node --version');
+    utils.resetCommandOutputCache();
+    await utils.getCommandOutput('node --version');
+
+    expect(execSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('deletes failed promise from cache', async () => {
+    await expect(utils.getCommandOutput('fail')).rejects.toThrow('error');
+    // Ensure subsequent call attempts command execution again instead of serving cached error
+    execSpy.mockImplementationOnce(async () => {
+      return {stdout: 'recovered', stderr: '', exitCode: 0};
+    });
+    const res = await utils.getCommandOutput('fail');
+    expect(res).toBe('recovered');
+    expect(execSpy).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe('isGhes', () => {
   const pristineEnv = process.env;
 

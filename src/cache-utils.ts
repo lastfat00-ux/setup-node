@@ -66,24 +66,50 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+// Module-level cache for getCommandOutput to avoid redundant process spawns/external calls.
+const commandOutputCache = new Map<string, Promise<string>>();
+
+export const resetCommandOutputCache = (): void => {
+  commandOutputCache.clear();
+};
+
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
+  const cacheKey = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
 
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  if (cachedPromise) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  // To ensure promise identity and prevent dog-piling, we cache the promise immediately.
+  const promise = (async () => {
+    let {stdout, stderr, exitCode} = await exec.getExecOutput(
+      toolCommand,
+      undefined,
+      {ignoreReturnCode: true, ...(cwd && {cwd})}
+    );
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  // Catch block to remove the failed promise's key from the commandOutputCache Map
+  const safePromise = promise.catch(err => {
+    commandOutputCache.delete(cacheKey);
+    throw err;
+  });
+
+  commandOutputCache.set(cacheKey, safePromise);
+  return safePromise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +117,9 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  // Correctness Fix: getCommandOutputNotEmpty explicitly awaits the call to getCommandOutput
+  // before checking if the result is empty to avoid incorrectly evaluating the truthiness of the Promise object.
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

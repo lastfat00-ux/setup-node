@@ -71619,7 +71619,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", ({ value: true }));
-exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.supportedPackageManagers = void 0;
+exports.repoHasYarnBerryManagedDependencies = exports.getCacheDirectories = exports.resetProjectDirectoriesMemoized = exports.getPackageManagerInfo = exports.getCommandOutputNotEmpty = exports.getCommandOutput = exports.resetCommandOutputCache = exports.supportedPackageManagers = void 0;
 exports.isGhes = isGhes;
 exports.isCacheFeatureAvailable = isCacheFeatureAvailable;
 const core = __importStar(__nccwpck_require__(37484));
@@ -71656,19 +71656,48 @@ exports.supportedPackageManagers = {
         }
     }
 };
-const getCommandOutput = async (toolCommand, cwd) => {
-    let { stdout, stderr, exitCode } = await exec.getExecOutput(toolCommand, undefined, { ignoreReturnCode: true, ...(cwd && { cwd }) });
-    if (exitCode) {
-        stderr = !stderr.trim()
-            ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-            : stderr;
-        throw new Error(stderr);
+// Module-level cache for shell command output to optimize execution times.
+// Declared with const to satisfy ESLint prefer-const.
+const commandOutputCache = new Map();
+/**
+ * Resets the command output cache. Essential for test isolation.
+ */
+const resetCommandOutputCache = () => {
+    commandOutputCache.clear();
+};
+exports.resetCommandOutputCache = resetCommandOutputCache;
+/**
+ * Executes a command and caches the promise to avoid redundant runs and dog-piling.
+ * Returns the promise directly without the `async` keyword to preserve promise identity.
+ */
+const getCommandOutput = (toolCommand, cwd) => {
+    const key = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+    const cached = commandOutputCache.get(key);
+    if (cached) {
+        return cached;
     }
-    return stdout.trim();
+    // To prevent 'dog-piling' and redundant process spawns during concurrent calls,
+    // we cache the resulting Promise immediately.
+    const promise = (async () => {
+        let { stdout, stderr, exitCode } = await exec.getExecOutput(toolCommand, undefined, { ignoreReturnCode: true, ...(cwd && { cwd }) });
+        if (exitCode) {
+            stderr = !stderr.trim()
+                ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+                : stderr;
+            throw new Error(stderr);
+        }
+        return stdout.trim();
+    })();
+    // To prevent caching permanent errors, remove failed promise key from the map.
+    promise.catch(() => {
+        commandOutputCache.delete(key);
+    });
+    commandOutputCache.set(key, promise);
+    return promise;
 };
 exports.getCommandOutput = getCommandOutput;
 const getCommandOutputNotEmpty = async (toolCommand, error, cwd) => {
-    const stdOut = (0, exports.getCommandOutput)(toolCommand, cwd);
+    const stdOut = await (0, exports.getCommandOutput)(toolCommand, cwd);
     if (!stdOut) {
         throw new Error(error);
     }

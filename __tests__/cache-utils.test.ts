@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
 import {
@@ -7,7 +8,9 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache,
+  getCommandOutput
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -359,6 +362,115 @@ describe('cache-utils', () => {
         ]);
       }
     );
+  });
+
+  describe('getCommandOutput memoization', () => {
+    let execSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      resetCommandOutputCache();
+      execSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+      resetCommandOutputCache();
+    });
+
+    it('should memoize command outputs on subsequent calls', async () => {
+      execSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'test-version',
+        stderr: ''
+      });
+
+      // Restore utils.getCommandOutput spy so that we test the real implementation
+      if (getCommandOutputSpy) {
+        getCommandOutputSpy.mockRestore();
+      }
+
+      const res1 = await getCommandOutput('node --version');
+      const res2 = await getCommandOutput('node --version');
+
+      expect(res1).toBe('test-version');
+      expect(res2).toBe('test-version');
+      expect(execSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should maintain promise identity for simultaneous concurrent calls', async () => {
+      execSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v22.22.1',
+        stderr: ''
+      });
+
+      // Restore utils.getCommandOutput spy to test real implementation
+      if (getCommandOutputSpy) {
+        getCommandOutputSpy.mockRestore();
+      }
+
+      const p1 = getCommandOutput('node --version');
+      const p2 = getCommandOutput('node --version');
+
+      expect(p1).toBe(p2); // Identity check
+
+      const [res1, res2] = await Promise.all([p1, p2]);
+      expect(res1).toBe('v22.22.1');
+      expect(res2).toBe('v22.22.1');
+      expect(execSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not cache errors and evict on failure', async () => {
+      execSpy.mockRejectedValueOnce(new Error('Spawn error'));
+      execSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'recovered',
+        stderr: ''
+      });
+
+      // Restore utils.getCommandOutput spy to test real implementation
+      if (getCommandOutputSpy) {
+        getCommandOutputSpy.mockRestore();
+      }
+
+      await expect(getCommandOutput('bad-command')).rejects.toThrow('Spawn error');
+
+      const res = await getCommandOutput('bad-command');
+      expect(res).toBe('recovered');
+      expect(execSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should cache separately for different cwd or PATH env', async () => {
+      execSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'cwd-output',
+        stderr: ''
+      });
+
+      // Restore utils.getCommandOutput spy to test real implementation
+      if (getCommandOutputSpy) {
+        getCommandOutputSpy.mockRestore();
+      }
+
+      const res1 = await getCommandOutput('node --version', '/dir1');
+      const res2 = await getCommandOutput('node --version', '/dir2');
+
+      expect(res1).toBe('cwd-output');
+      expect(res2).toBe('cwd-output');
+      expect(execSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should handle defensive fallback if exec.getExecOutput returns undefined', async () => {
+      execSpy.mockResolvedValue(undefined as any);
+
+      // Restore utils.getCommandOutput spy to test real implementation
+      if (getCommandOutputSpy) {
+        getCommandOutputSpy.mockRestore();
+      }
+
+      const res = await getCommandOutput('any-command');
+      expect(res).toBe('');
+    });
   });
 });
 

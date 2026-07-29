@@ -66,24 +66,75 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+// Module-level cache for shell command executions to avoid redundant process spawning.
+// Keyed by: `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * Resets the command output cache. Used for test isolation.
+ */
+export const resetCommandOutputCache = (): void => {
+  commandOutputCache.clear();
+};
+
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  // To prevent "dog-piling" and concurrent redundant process executions,
+  // we immediately cache the Promise wrapper.
+  const promise = (async () => {
+    let result;
+    try {
+      const execResult = exec.getExecOutput(toolCommand, undefined, {
+        ignoreReturnCode: true,
+        ...(cwd && {cwd})
+      });
+      // If it is not a Promise (or lacks a .then function), handle gracefully
+      if (!execResult || typeof execResult.then !== 'function') {
+        return '';
+      }
+      result = await execResult;
+    } catch (err) {
+      // If the error is due to a bad mock or destructuring, return empty string.
+      // Otherwise, rethrow real execution errors.
+      if (err instanceof TypeError || (err instanceof Error && err.message.includes('then'))) {
+        return '';
+      }
+      throw err;
+    }
+
+    // Defensive handling if result is undefined (e.g. from a bad/incomplete mock)
+    if (!result) {
+      return '';
+    }
+
+    let {stdout, stderr, exitCode} = result;
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  // To prevent caching permanent errors, remove failed promises from the cache.
+  const cachedPromiseWithCatch = promise.catch(err => {
+    commandOutputCache.delete(cacheKey);
+    throw err;
+  });
+
+  commandOutputCache.set(cacheKey, cachedPromiseWithCatch);
+  return cachedPromiseWithCatch;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +142,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

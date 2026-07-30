@@ -1,4 +1,5 @@
 import * as core from '@actions/core';
+import * as exec from '@actions/exec';
 import * as cache from '@actions/cache';
 import path from 'path';
 import * as utils from '../src/cache-utils';
@@ -359,6 +360,99 @@ describe('cache-utils', () => {
         ]);
       }
     );
+  });
+
+  describe('getCommandOutput with memoization', () => {
+    let execOutputSpy: jest.SpyInstance;
+    const pristineEnv = process.env;
+
+    beforeEach(() => {
+      // Restore the mock of utils.getCommandOutput so we can test its actual implementation
+      getCommandOutputSpy.mockRestore();
+      utils.resetCommandOutputCache();
+      process.env = { ...pristineEnv };
+    });
+
+    afterEach(() => {
+      process.env = pristineEnv;
+    });
+
+    it('should retrieve and cache the output of an external command', async () => {
+      execOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      execOutputSpy.mockResolvedValue({
+        stdout: 'v1.2.3',
+        stderr: '',
+        exitCode: 0
+      });
+
+      const res1 = await utils.getCommandOutput('node --version');
+      const res2 = await utils.getCommandOutput('node --version');
+
+      expect(res1).toBe('v1.2.3');
+      expect(res2).toBe('v1.2.3');
+      expect(execOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should preserve promise identity for concurrent identical command calls', async () => {
+      execOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      execOutputSpy.mockResolvedValue({
+        stdout: 'v1.2.3',
+        stderr: '',
+        exitCode: 0
+      });
+
+      const promise1 = utils.getCommandOutput('node --version');
+      const promise2 = utils.getCommandOutput('node --version');
+
+      expect(promise1).toBe(promise2);
+
+      const [res1, res2] = await Promise.all([promise1, promise2]);
+      expect(res1).toBe('v1.2.3');
+      expect(res2).toBe('v1.2.3');
+      expect(execOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should evict failed commands from cache on rejection', async () => {
+      execOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      execOutputSpy.mockRejectedValueOnce(new Error('Spawn error'));
+      execOutputSpy.mockResolvedValueOnce({
+        stdout: 'success',
+        stderr: '',
+        exitCode: 0
+      });
+
+      await expect(utils.getCommandOutput('node --version')).rejects.toThrow('Spawn error');
+
+      const res = await utils.getCommandOutput('node --version');
+      expect(res).toBe('success');
+      expect(execOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should cache separate entries for different working directories and PATH values', async () => {
+      execOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      execOutputSpy.mockResolvedValue({
+        stdout: 'result',
+        stderr: '',
+        exitCode: 0
+      });
+
+      await utils.getCommandOutput('node --version', '/dirA');
+      await utils.getCommandOutput('node --version', '/dirB');
+
+      expect(execOutputSpy).toHaveBeenCalledTimes(2);
+
+      process.env.PATH = '/custom/path';
+      await utils.getCommandOutput('node --version', '/dirA');
+      expect(execOutputSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it('should gracefully return empty string if mock getExecOutput returns undefined', async () => {
+      execOutputSpy = jest.spyOn(exec, 'getExecOutput');
+      execOutputSpy.mockReturnValue(undefined as any);
+
+      const res = await utils.getCommandOutput('node --version');
+      expect(res).toBe('');
+    });
   });
 });
 

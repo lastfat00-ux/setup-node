@@ -15,6 +15,8 @@ import * as glob from '@actions/glob';
 import {Globber} from '@actions/glob';
 import {MockGlobber} from './mock/glob-mock';
 
+import * as exec from '@actions/exec';
+
 describe('cache-utils', () => {
   const versionYarn1 = '1.2.3';
 
@@ -41,6 +43,94 @@ describe('cache-utils', () => {
     fsRealPathSyncSpy = jest.spyOn(fs, 'realpathSync');
     fsRealPathSyncSpy.mockImplementation(dirName => {
       return dirName;
+    });
+  });
+
+  describe('getCommandOutput memoization', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      // Restore getCommandOutputSpy so we can test the real getCommandOutput implementation
+      if (getCommandOutputSpy) {
+        getCommandOutputSpy.mockRestore();
+      }
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+      utils.resetCommandOutputCache();
+    });
+
+    it('should memoize subsequent calls and only spawn process once', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.2.3\n',
+        stderr: ''
+      });
+
+      const res1 = await utils.getCommandOutput('node --version');
+      const res2 = await utils.getCommandOutput('node --version');
+
+      expect(res1).toBe('v1.2.3');
+      expect(res2).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should invalidate cache when resetCommandOutputCache is called', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.2.3\n',
+        stderr: ''
+      });
+
+      const res1 = await utils.getCommandOutput('node --version');
+      expect(res1).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+      utils.resetCommandOutputCache();
+
+      const res2 = await utils.getCommandOutput('node --version');
+      expect(res2).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should cache separate keys for different commands or paths', async () => {
+      getExecOutputSpy.mockImplementation((cmd, args, options) => {
+        const pathSuffix = options?.cwd ? ` in ${options.cwd}` : '';
+        return Promise.resolve({
+          exitCode: 0,
+          stdout: `${cmd}${pathSuffix}`,
+          stderr: ''
+        });
+      });
+
+      const res1 = await utils.getCommandOutput('command1', 'dirA');
+      const res2 = await utils.getCommandOutput('command1', 'dirB');
+      const res3 = await utils.getCommandOutput('command2', 'dirA');
+
+      expect(res1).toBe('command1 in dirA');
+      expect(res2).toBe('command1 in dirB');
+      expect(res3).toBe('command2 in dirA');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it('should clear failed command promise from cache to prevent caching permanent errors', async () => {
+      getExecOutputSpy
+        .mockRejectedValueOnce(new Error('Process launch error'))
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: 'success',
+          stderr: ''
+        });
+
+      await expect(utils.getCommandOutput('fail-command')).rejects.toThrow(
+        'Process launch error'
+      );
+
+      const res = await utils.getCommandOutput('fail-command');
+      expect(res).toBe('success');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
     });
   });
 

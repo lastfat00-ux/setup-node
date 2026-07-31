@@ -66,24 +66,61 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+// Module-level cache to memoize external command outputs.
+// Keyed by: `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`
+// Delimiting with null byte \0 prevents key collisions and PATH inclusion ensures safe invalidation.
+const commandOutputCache = new Map<string, Promise<string>>();
+
+export const resetCommandOutputCache = (): void => {
+  commandOutputCache.clear();
+};
+
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  // To prevent 'dog-piling' and redundant process spawns during concurrent calls,
+  // we immediately cache the resulting Promise.
+  // Note: Avoid 'async' wrapper on the outer function signature so the exact same promise is returned,
+  // preventing the JS engine from creating a new wrapper Promise instance on every invocation.
+  const executePromise = (async () => {
+    const rawResult = exec.getExecOutput(toolCommand, undefined, {
+      ignoreReturnCode: true,
+      ...(cwd && {cwd})
+    });
+
+    // Defensive fallback: handle mock implementations that return undefined or lack .then
+    if (!rawResult || typeof rawResult.then !== 'function') {
+      return '';
+    }
+
+    const {stdout, stderr, exitCode} = await rawResult;
+
+    if (exitCode) {
+      const errMsg =
+        !stderr || !stderr.trim()
+          ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+          : stderr;
+      throw new Error(errMsg);
+    }
+
+    return stdout.trim();
+  })();
+
+  // If the command fails, clear the cache entry so permanent errors are not cached.
+  const promiseWithCatch = executePromise.catch(err => {
+    commandOutputCache.delete(cacheKey);
+    throw err;
+  });
+
+  commandOutputCache.set(cacheKey, promiseWithCatch);
+  return promiseWithCatch;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +128,8 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  // Await explicitly to check for empty output correctly (preventing false truthiness of a Promise).
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

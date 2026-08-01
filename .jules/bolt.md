@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Cleanup after Install]
 **Learning:** Running `pnpm install` can create a lockfile (like `pnpm-lock.yaml`) if it doesn't exist, which should not be committed unless requested.
 **Action:** Always check for and remove any auto-generated lockfiles or temporary scripts before submission.
+
+## 2025-05-20 - [Promise identity & Truthiness in execution wrappers]
+**Learning:** Returning a promise from an `async` function implicitly wraps it in a new promise, breaking promise identity and object equality. Also, failing to await a promise returned from a wrapper means checking if it is empty/falsy evaluates the Promise object (which is always truthy) instead of the actual resolved string.
+**Action:** Declare wrappers returning cached promises *without* the `async` keyword to preserve original promise identity, and always explicitly `await` their values when verifying correctness.

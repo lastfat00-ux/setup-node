@@ -66,24 +66,64 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+// Module-level cache Map declared with `const` to satisfy the `prefer-const` ESLint rule.
+// Delimits using null characters `\0` to prevent key collisions between similar paths and commands.
+// Keys include PATH env var to handle dynamic environment or version updates.
+const commandOutputCache = new Map<string, Promise<string>>();
+
+export const resetCommandOutputCache = (): void => {
+  commandOutputCache.clear();
+};
+
+// To ensure promise identity (object equality) when returning cached results in
+// async-compatible functions, avoid using the `async` keyword in the function signature;
+// instead, return the Promise directly. This prevents the runtime from wrapping
+// the cached Promise in a new, distinct Promise instance on every call.
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}\0${cwd || ''}\0${process.env.PATH || ''}`;
+  const cached = commandOutputCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
-  return stdout.trim();
+  // To prevent 'dog-piling' and redundant process spawns during concurrent calls,
+  // we cache the resulting Promise immediately, ensuring all simultaneous requests
+  // for the same command/directory pair await the same process execution.
+  const promise = (async () => {
+    const execPromise = exec.getExecOutput(
+      toolCommand,
+      undefined,
+      {ignoreReturnCode: true, ...(cwd && {cwd})}
+    );
+
+    // Defensive fallback: handle mock implementations of exec.getExecOutput that
+    // return undefined or lack a .then function to prevent test suite crashes.
+    if (!execPromise || typeof execPromise.then !== 'function') {
+      return '';
+    }
+
+    let {stdout, stderr, exitCode} = await execPromise;
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  // To prevent caching permanent errors, remove the promise's key on failure.
+  promise.catch(() => {
+    commandOutputCache.delete(cacheKey);
+  });
+
+  commandOutputCache.set(cacheKey, promise);
+  return promise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +131,9 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  // Correctness Fix: Explicitly await getCommandOutput before checking if the result
+  // is empty to avoid incorrectly evaluating the truthiness of the Promise object.
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

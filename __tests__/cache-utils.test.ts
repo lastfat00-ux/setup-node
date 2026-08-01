@@ -1,16 +1,9 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
-import {
-  PackageManagerInfo,
-  isCacheFeatureAvailable,
-  supportedPackageManagers,
-  isGhes,
-  resetProjectDirectoriesMemoized
-} from '../src/cache-utils';
 import fs from 'fs';
-import * as cacheUtils from '../src/cache-utils';
 import * as glob from '@actions/glob';
 import {Globber} from '@actions/glob';
 import {MockGlobber} from './mock/glob-mock';
@@ -56,7 +49,7 @@ describe('cache-utils', () => {
   }, 100000);
 
   describe('getPackageManagerInfo', () => {
-    it.each<[string, PackageManagerInfo | null]>([
+    it.each<[string, utils.PackageManagerInfo | null]>([
       ['npm', utils.supportedPackageManagers.npm],
       ['pnpm', utils.supportedPackageManagers.pnpm],
       ['yarn', utils.supportedPackageManagers.yarn],
@@ -75,7 +68,7 @@ describe('cache-utils', () => {
     isFeatureAvailable.mockImplementation(() => false);
     process.env['GITHUB_SERVER_URL'] = 'https://www.test.com';
 
-    expect(isCacheFeatureAvailable()).toBeFalsy();
+    expect(utils.isCacheFeatureAvailable()).toBeFalsy();
     expect(warningSpy).toHaveBeenCalledWith(
       'Cache action is only supported on GHES version >= 3.5. If you are on version >=3.5 Please check with GHES admin if Actions cache service is enabled or not.'
     );
@@ -84,7 +77,7 @@ describe('cache-utils', () => {
   it('isCacheFeatureAvailable for GHES has an interhal error', () => {
     isFeatureAvailable.mockImplementation(() => false);
     process.env['GITHUB_SERVER_URL'] = '';
-    isCacheFeatureAvailable();
+    utils.isCacheFeatureAvailable();
     expect(warningSpy).toHaveBeenCalledWith(
       'The runner was not able to contact the cache service. Caching will be skipped'
     );
@@ -93,7 +86,7 @@ describe('cache-utils', () => {
   it('isCacheFeatureAvailable for GHES is available', () => {
     isFeatureAvailable.mockImplementation(() => true);
 
-    expect(isCacheFeatureAvailable()).toStrictEqual(true);
+    expect(utils.isCacheFeatureAvailable()).toStrictEqual(true);
   });
 
   afterEach(() => {
@@ -123,7 +116,7 @@ describe('cache-utils', () => {
           MockGlobber.create(['/foo', '/bar'])
       );
 
-      resetProjectDirectoriesMemoized();
+      utils.resetProjectDirectoriesMemoized();
     });
 
     afterEach(() => {
@@ -133,18 +126,18 @@ describe('cache-utils', () => {
     });
 
     it.each([
-      [supportedPackageManagers.npm, ''],
-      [supportedPackageManagers.npm, '/dir/file.lock'],
-      [supportedPackageManagers.npm, '/**/file.lock'],
-      [supportedPackageManagers.pnpm, ''],
-      [supportedPackageManagers.pnpm, '/dir/file.lock'],
-      [supportedPackageManagers.pnpm, '/**/file.lock']
+      [utils.supportedPackageManagers.npm, ''],
+      [utils.supportedPackageManagers.npm, '/dir/file.lock'],
+      [utils.supportedPackageManagers.npm, '/**/file.lock'],
+      [utils.supportedPackageManagers.pnpm, ''],
+      [utils.supportedPackageManagers.pnpm, '/dir/file.lock'],
+      [utils.supportedPackageManagers.pnpm, '/**/file.lock']
     ])(
       'getCacheDirectoriesPaths should return one dir for non yarn',
       async (packageManagerInfo, cacheDependency) => {
         getCommandOutputSpy.mockImplementation(() => 'foo');
 
-        const dirs = await cacheUtils.getCacheDirectories(
+        const dirs = await utils.getCacheDirectories(
           packageManagerInfo,
           cacheDependency
         );
@@ -158,23 +151,23 @@ describe('cache-utils', () => {
     it('getCacheDirectoriesPaths should return one dir for yarn without cacheDependency', async () => {
       getCommandOutputSpy.mockImplementation(() => 'foo');
 
-      const dirs = await cacheUtils.getCacheDirectories(
-        supportedPackageManagers.yarn,
+      const dirs = await utils.getCacheDirectories(
+        utils.supportedPackageManagers.yarn,
         ''
       );
       expect(dirs).toEqual(['foo']);
     });
 
     it.each([
-      [supportedPackageManagers.npm, ''],
-      [supportedPackageManagers.npm, '/dir/file.lock'],
-      [supportedPackageManagers.npm, '/**/file.lock'],
-      [supportedPackageManagers.pnpm, ''],
-      [supportedPackageManagers.pnpm, '/dir/file.lock'],
-      [supportedPackageManagers.pnpm, '/**/file.lock'],
-      [supportedPackageManagers.yarn, ''],
-      [supportedPackageManagers.yarn, '/dir/file.lock'],
-      [supportedPackageManagers.yarn, '/**/file.lock']
+      [utils.supportedPackageManagers.npm, ''],
+      [utils.supportedPackageManagers.npm, '/dir/file.lock'],
+      [utils.supportedPackageManagers.npm, '/**/file.lock'],
+      [utils.supportedPackageManagers.pnpm, ''],
+      [utils.supportedPackageManagers.pnpm, '/dir/file.lock'],
+      [utils.supportedPackageManagers.pnpm, '/**/file.lock'],
+      [utils.supportedPackageManagers.yarn, ''],
+      [utils.supportedPackageManagers.yarn, '/dir/file.lock'],
+      [utils.supportedPackageManagers.yarn, '/**/file.lock']
     ])(
       'getCacheDirectoriesPaths should throw for getCommandOutput returning empty',
       async (packageManagerInfo, cacheDependency) => {
@@ -185,14 +178,14 @@ describe('cache-utils', () => {
         );
 
         await expect(
-          cacheUtils.getCacheDirectories(packageManagerInfo, cacheDependency)
+          utils.getCacheDirectories(packageManagerInfo, cacheDependency)
         ).rejects.toThrow(); //'Could not get cache folder path for /dir');
       }
     );
 
     it.each([
-      [supportedPackageManagers.yarn, '/dir/file.lock'],
-      [supportedPackageManagers.yarn, '/**/file.lock']
+      [utils.supportedPackageManagers.yarn, '/dir/file.lock'],
+      [utils.supportedPackageManagers.yarn, '/**/file.lock']
     ])(
       'getCacheDirectoriesPaths should nothrow in case of having not directories',
       async (packageManagerInfo, cacheDependency) => {
@@ -200,7 +193,7 @@ describe('cache-utils', () => {
           isDirectory: () => false
         }));
 
-        await cacheUtils.getCacheDirectories(
+        await utils.getCacheDirectories(
           packageManagerInfo,
           cacheDependency
         );
@@ -217,8 +210,8 @@ describe('cache-utils', () => {
         getCommandOutputSpy.mockImplementationOnce(() => version);
         getCommandOutputSpy.mockImplementationOnce(() => `foo${version}`);
 
-        const dirs = await cacheUtils.getCacheDirectories(
-          supportedPackageManagers.yarn,
+        const dirs = await utils.getCacheDirectories(
+          utils.supportedPackageManagers.yarn,
           ''
         );
         expect(dirs).toEqual([`foo${version}`]);
@@ -237,8 +230,8 @@ describe('cache-utils', () => {
             MockGlobber.create(['/tmp/dir1/file', '/tmp/dir2/file'])
         );
 
-        const dirs = await cacheUtils.getCacheDirectories(
-          supportedPackageManagers.yarn,
+        const dirs = await utils.getCacheDirectories(
+          utils.supportedPackageManagers.yarn,
           '/tmp/**/file'
         );
         expect(dirs).toEqual([`file_${version}_1`, `file_${version}_2`]);
@@ -261,8 +254,8 @@ describe('cache-utils', () => {
             ])
         );
 
-        const dirs = await cacheUtils.getCacheDirectories(
-          supportedPackageManagers.yarn,
+        const dirs = await utils.getCacheDirectories(
+          utils.supportedPackageManagers.yarn,
           '/tmp/**/file'
         );
         expect(dirs).toEqual([`file_${version}_1`, `file_${version}_2`]);
@@ -287,8 +280,8 @@ describe('cache-utils', () => {
             ])
         );
 
-        const dirs = await cacheUtils.getCacheDirectories(
-          supportedPackageManagers.yarn,
+        const dirs = await utils.getCacheDirectories(
+          utils.supportedPackageManagers.yarn,
           '/tmp/**/file'
         );
         expect(dirs).toEqual([`file_${version}_1`, `file_${version}_0`]);
@@ -347,8 +340,8 @@ describe('cache-utils', () => {
         getCommandOutputSpy.mockImplementation((command: string) =>
           command.includes('version') ? version : `file_${version}_${dirNo++}`
         );
-        const dirs = await cacheUtils.getCacheDirectories(
-          supportedPackageManagers.yarn,
+        const dirs = await utils.getCacheDirectories(
+          utils.supportedPackageManagers.yarn,
           cacheDependencyPath
         );
         expect(dirs).toEqual([
@@ -376,26 +369,123 @@ describe('isGhes', () => {
 
   it('returns false when the GITHUB_SERVER_URL environment variable is not defined', () => {
     delete process.env['GITHUB_SERVER_URL'];
-    expect(isGhes()).toBeFalsy();
+    expect(utils.isGhes()).toBeFalsy();
   });
 
   it('returns false when the GITHUB_SERVER_URL environment variable is set to github.com', () => {
     process.env['GITHUB_SERVER_URL'] = 'https://github.com';
-    expect(isGhes()).toBeFalsy();
+    expect(utils.isGhes()).toBeFalsy();
   });
 
   it('returns false when the GITHUB_SERVER_URL environment variable is set to a GitHub Enterprise Cloud-style URL', () => {
     process.env['GITHUB_SERVER_URL'] = 'https://contoso.ghe.com';
-    expect(isGhes()).toBeFalsy();
+    expect(utils.isGhes()).toBeFalsy();
   });
 
   it('returns false when the GITHUB_SERVER_URL environment variable has a .localhost suffix', () => {
     process.env['GITHUB_SERVER_URL'] = 'https://mock-github.localhost';
-    expect(isGhes()).toBeFalsy();
+    expect(utils.isGhes()).toBeFalsy();
   });
 
   it('returns true when the GITHUB_SERVER_URL environment variable is set to some other URL', () => {
     process.env['GITHUB_SERVER_URL'] = 'https://src.onpremise.fabrikam.com';
-    expect(isGhes()).toBeTruthy();
+    expect(utils.isGhes()).toBeTruthy();
+  });
+});
+
+describe('getCommandOutput memoization', () => {
+  let execGetExecOutputSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    utils.resetCommandOutputCache();
+    execGetExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+  });
+
+  afterEach(() => {
+    execGetExecOutputSpy.mockRestore();
+  });
+
+  it('should memoize command output for the same command and directory', async () => {
+    execGetExecOutputSpy.mockResolvedValue({
+      stdout: 'v1.2.3\n',
+      stderr: '',
+      exitCode: 0
+    });
+
+    const promise1 = utils.getCommandOutput('node --version', '/some/dir');
+    const promise2 = utils.getCommandOutput('node --version', '/some/dir');
+
+    // To ensure promise identity (object equality) when returning cached results
+    expect(promise1).toBe(promise2);
+
+    const result1 = await promise1;
+    const result2 = await promise2;
+
+    expect(result1).toBe('v1.2.3');
+    expect(result2).toBe('v1.2.3');
+    expect(execGetExecOutputSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('should not share cache between different directories or commands', async () => {
+    execGetExecOutputSpy.mockResolvedValue({
+      stdout: 'v1.2.3\n',
+      stderr: '',
+      exitCode: 0
+    });
+
+    const res1 = await utils.getCommandOutput('node --version', '/dir1');
+    const res2 = await utils.getCommandOutput('node --version', '/dir2');
+    const res3 = await utils.getCommandOutput('npm --version', '/dir1');
+
+    expect(res1).toBe('v1.2.3');
+    expect(res2).toBe('v1.2.3');
+    expect(res3).toBe('v1.2.3');
+    expect(execGetExecOutputSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it('should remove failed command from cache on rejection', async () => {
+    execGetExecOutputSpy.mockResolvedValueOnce({
+      stdout: '',
+      stderr: 'Some error occurred',
+      exitCode: 1
+    });
+
+    await expect(utils.getCommandOutput('failed-cmd', '/dir')).rejects.toThrow('Some error occurred');
+
+    // Since the first call failed, it should have been deleted from the cache.
+    // A subsequent call should invoke getExecOutput again.
+    execGetExecOutputSpy.mockResolvedValueOnce({
+      stdout: 'success',
+      stderr: '',
+      exitCode: 0
+    });
+
+    const res = await utils.getCommandOutput('failed-cmd', '/dir');
+    expect(res).toBe('success');
+    expect(execGetExecOutputSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('should clear the cache when resetCommandOutputCache is called', async () => {
+    execGetExecOutputSpy.mockResolvedValue({
+      stdout: 'output',
+      stderr: '',
+      exitCode: 0
+    });
+
+    const res1 = await utils.getCommandOutput('node --version', '/dir');
+    utils.resetCommandOutputCache();
+    const res2 = await utils.getCommandOutput('node --version', '/dir');
+
+    expect(res1).toBe('output');
+    expect(res2).toBe('output');
+    expect(execGetExecOutputSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('should gracefully handle mock exec.getExecOutput returning undefined', async () => {
+    // Mock returning undefined to test defensive fallback
+    execGetExecOutputSpy.mockReturnValue(undefined);
+
+    const res = await utils.getCommandOutput('some-cmd');
+    expect(res).toBe('');
   });
 });

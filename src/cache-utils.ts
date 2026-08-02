@@ -17,6 +17,12 @@ interface SupportedPackageManagers {
   pnpm: PackageManagerInfo;
   yarn: PackageManagerInfo;
 }
+const commandOutputCache = new Map<string, Promise<string>>();
+
+export const resetCommandOutputCache = () => {
+  commandOutputCache.clear();
+};
+
 export const supportedPackageManagers: SupportedPackageManagers = {
   npm: {
     name: 'npm',
@@ -53,8 +59,11 @@ export const supportedPackageManagers: SupportedPackageManagers = {
       );
 
       const stdOut = yarnVersion.startsWith('1.')
-        ? await getCommandOutput('yarn cache dir', projectDir)
-        : await getCommandOutput('yarn config get cacheFolder', projectDir);
+        ? await exports.getCommandOutput('yarn cache dir', projectDir)
+        : await exports.getCommandOutput(
+            'yarn config get cacheFolder',
+            projectDir
+          );
 
       if (!stdOut) {
         throw new Error(
@@ -66,24 +75,47 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+  const cached = commandOutputCache.get(cacheKey);
+  if (cached) {
+    return cached;
   }
 
-  return stdout.trim();
+  const promise = (async () => {
+    const result = await exec.getExecOutput(toolCommand, undefined, {
+      ignoreReturnCode: true,
+      ...(cwd && {cwd})
+    });
+
+    // Defensive fallback for mock implementations of exec.getExecOutput
+    // that return undefined or lack a .then function.
+    if (!result) {
+      return '';
+    }
+
+    let {stdout, stderr, exitCode} = result;
+
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  // To prevent caching permanent errors, remove failed promise's key from the commandOutputCache Map.
+  promise.catch(() => {
+    commandOutputCache.delete(cacheKey);
+  });
+
+  commandOutputCache.set(cacheKey, promise);
+  return promise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +123,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await exports.getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }
@@ -250,7 +282,7 @@ const projectHasYarnBerryManagedDependencies = async (
   }
 
   // NOTE: yarn1 returns 'undefined' with return code = 0
-  const enableGlobalCache = await getCommandOutput(
+  const enableGlobalCache = await exports.getCommandOutput(
     'yarn config get enableGlobalCache',
     workDir
   );

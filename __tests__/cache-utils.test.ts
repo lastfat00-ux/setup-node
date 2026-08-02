@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
 import {
@@ -118,9 +119,8 @@ describe('cache-utils', () => {
 
       globCreateSpy = jest.spyOn(glob, 'create');
 
-      globCreateSpy.mockImplementation(
-        (pattern: string): Promise<Globber> =>
-          MockGlobber.create(['/foo', '/bar'])
+      globCreateSpy.mockImplementation((pattern: string): Promise<Globber> =>
+        MockGlobber.create(['/foo', '/bar'])
       );
 
       resetProjectDirectoriesMemoized();
@@ -232,9 +232,8 @@ describe('cache-utils', () => {
         getCommandOutputSpy.mockImplementation((command: string) =>
           command.includes('version') ? version : `file_${version}_${dirNo++}`
         );
-        globCreateSpy.mockImplementation(
-          (pattern: string): Promise<Globber> =>
-            MockGlobber.create(['/tmp/dir1/file', '/tmp/dir2/file'])
+        globCreateSpy.mockImplementation((pattern: string): Promise<Globber> =>
+          MockGlobber.create(['/tmp/dir1/file', '/tmp/dir2/file'])
         );
 
         const dirs = await cacheUtils.getCacheDirectories(
@@ -252,13 +251,12 @@ describe('cache-utils', () => {
         getCommandOutputSpy.mockImplementation((command: string) =>
           command.includes('version') ? version : `file_${version}_${dirNo++}`
         );
-        globCreateSpy.mockImplementation(
-          (pattern: string): Promise<Globber> =>
-            MockGlobber.create([
-              '/tmp/dir1/file',
-              '/tmp/dir2/file',
-              '/tmp/dir1/file'
-            ])
+        globCreateSpy.mockImplementation((pattern: string): Promise<Globber> =>
+          MockGlobber.create([
+            '/tmp/dir1/file',
+            '/tmp/dir2/file',
+            '/tmp/dir1/file'
+          ])
         );
 
         const dirs = await cacheUtils.getCacheDirectories(
@@ -278,13 +276,12 @@ describe('cache-utils', () => {
             ? version
             : `file_${version}_${dirNo++ % 2}`
         );
-        globCreateSpy.mockImplementation(
-          (pattern: string): Promise<Globber> =>
-            MockGlobber.create([
-              '/tmp/dir1/file',
-              '/tmp/dir2/file',
-              '/tmp/dir3/file'
-            ])
+        globCreateSpy.mockImplementation((pattern: string): Promise<Globber> =>
+          MockGlobber.create([
+            '/tmp/dir1/file',
+            '/tmp/dir2/file',
+            '/tmp/dir3/file'
+          ])
         );
 
         const dirs = await cacheUtils.getCacheDirectories(
@@ -334,14 +331,13 @@ describe('cache-utils', () => {
           /tmp/dir2/file
 /tmp/**/file
           `;
-        globCreateSpy.mockImplementation(
-          (pattern: string): Promise<Globber> =>
-            MockGlobber.create([
-              '/tmp/dir1/file',
-              '/tmp/dir2/file',
-              '/tmp/dir3/file',
-              '/tmp/dir4/file'
-            ])
+        globCreateSpy.mockImplementation((pattern: string): Promise<Globber> =>
+          MockGlobber.create([
+            '/tmp/dir1/file',
+            '/tmp/dir2/file',
+            '/tmp/dir3/file',
+            '/tmp/dir4/file'
+          ])
         );
         let dirNo = 1;
         getCommandOutputSpy.mockImplementation((command: string) =>
@@ -359,6 +355,80 @@ describe('cache-utils', () => {
         ]);
       }
     );
+  });
+
+  describe('memoized getCommandOutput', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      // Restore the module-level spy so we can test the real getCommandOutput
+      getCommandOutputSpy.mockRestore();
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+      utils.resetCommandOutputCache();
+    });
+
+    it('should cache and reuse command output promises', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.2.3',
+        stderr: ''
+      });
+
+      const p1 = utils.getCommandOutput('node --version');
+      const p2 = utils.getCommandOutput('node --version');
+
+      // Verify that the same promise is returned (identity/equality)
+      expect(p1).toBe(p2);
+
+      const result = await p1;
+      expect(result).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should clear cache on resetCommandOutputCache', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.2.3',
+        stderr: ''
+      });
+
+      const p1 = utils.getCommandOutput('node --version');
+      await p1;
+
+      utils.resetCommandOutputCache();
+
+      const p2 = utils.getCommandOutput('node --version');
+      await p2;
+
+      expect(p1).not.toBe(p2);
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should remove failed command promise from cache', async () => {
+      getExecOutputSpy.mockResolvedValueOnce({
+        exitCode: 1,
+        stdout: '',
+        stderr: 'Error running command'
+      });
+
+      await expect(utils.getCommandOutput('failing-command')).rejects.toThrow(
+        'Error running command'
+      );
+
+      getExecOutputSpy.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: 'success',
+        stderr: ''
+      });
+
+      const result = await utils.getCommandOutput('failing-command');
+      expect(result).toBe('success');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

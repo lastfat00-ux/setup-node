@@ -11,6 +11,7 @@ import os from 'os';
 import fs from 'fs';
 
 import {NodeInputs, INodeVersion, INodeVersionInfo} from './base-models';
+import {resetCommandOutputCache} from '../cache-utils';
 
 export default abstract class BaseDistribution {
   protected httpClient: hc.HttpClient;
@@ -19,6 +20,7 @@ export default abstract class BaseDistribution {
 
   public static resetCache() {
     BaseDistribution.nodeJsVersionsCache.clear();
+    resetCommandOutputCache();
   }
 
   constructor(protected nodeInfo: NodeInputs) {
@@ -342,16 +344,18 @@ export default abstract class BaseDistribution {
   protected filterVersions(nodeJsVersions: INodeVersion[]) {
     const dataFileName = this.getDistFileName();
 
-    return nodeJsVersions
-      .filter(nodeVersion => nodeVersion.files.includes(dataFileName))
-      // Schwartzian transform: pre-parse versions to avoid redundant parsing during sort (O(N) vs O(N log N))
-      .map(nodeVersion => ({
-        version: nodeVersion.version,
-        parsed: semver.parse(nodeVersion.version)
-      }))
-      .filter(item => item.parsed !== null)
-      .sort((a, b) => b.parsed!.compare(a.parsed!))
-      .map(item => item.version);
+    return (
+      nodeJsVersions
+        .filter(nodeVersion => nodeVersion.files.includes(dataFileName))
+        // Schwartzian transform: pre-parse versions to avoid redundant parsing during sort (O(N) vs O(N log N))
+        .map(nodeVersion => ({
+          version: nodeVersion.version,
+          parsed: semver.parse(nodeVersion.version)
+        }))
+        .filter(item => item.parsed !== null)
+        .sort((a, b) => b.parsed!.compare(a.parsed!))
+        .map(item => item.version)
+    );
   }
 
   protected translateArchToDistUrl(arch: string): string {

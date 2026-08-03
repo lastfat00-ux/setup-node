@@ -14,6 +14,7 @@ import * as cacheUtils from '../src/cache-utils';
 import * as glob from '@actions/glob';
 import {Globber} from '@actions/glob';
 import {MockGlobber} from './mock/glob-mock';
+import * as exec from '@actions/exec';
 
 describe('cache-utils', () => {
   const versionYarn1 = '1.2.3';
@@ -68,6 +69,122 @@ describe('cache-utils', () => {
       await expect(utils.getPackageManagerInfo(packageManager)).resolves.toBe(
         result
       );
+    });
+  });
+
+  describe('getCommandOutput Memoization and Performance', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+    });
+
+    it('should memoize subsequent calls to the same command and directory', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'v1.2.3\n',
+        stderr: '',
+        exitCode: 0
+      });
+
+      // Restore real getCommandOutput from utils
+      getCommandOutputSpy.mockRestore();
+
+      const output1 = await utils.getCommandOutput('node --version');
+      const output2 = await utils.getCommandOutput('node --version');
+
+      expect(output1).toBe('v1.2.3');
+      expect(output2).toBe('v1.2.3');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should prevent dog-piling by returning the same promise for concurrent calls', async () => {
+      let resolvePromise: any;
+      const deferredPromise = new Promise<{
+        stdout: string;
+        stderr: string;
+        exitCode: number;
+      }>(resolve => {
+        resolvePromise = resolve;
+      });
+
+      getExecOutputSpy.mockReturnValue(deferredPromise);
+
+      // Restore real getCommandOutput from utils
+      getCommandOutputSpy.mockRestore();
+
+      const call1 = utils.getCommandOutput('concurrent-command');
+      const call2 = utils.getCommandOutput('concurrent-command');
+
+      // They must be the same Promise instance
+      expect(call1).toBe(call2);
+
+      resolvePromise({
+        stdout: 'concurrent-result',
+        stderr: '',
+        exitCode: 0
+      });
+
+      const output1 = await call1;
+      const output2 = await call2;
+
+      expect(output1).toBe('concurrent-result');
+      expect(output2).toBe('concurrent-result');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should evict failed runs from cache map so errors are not cached permanently', async () => {
+      getExecOutputSpy.mockResolvedValueOnce({
+        stdout: '',
+        stderr: 'Some transient failure',
+        exitCode: 1
+      });
+
+      // Restore real getCommandOutput from utils
+      getCommandOutputSpy.mockRestore();
+
+      await expect(utils.getCommandOutput('failing-command')).rejects.toThrow(
+        'Some transient failure'
+      );
+
+      // Now resolve successfully
+      getExecOutputSpy.mockResolvedValueOnce({
+        stdout: 'success-result',
+        stderr: '',
+        exitCode: 0
+      });
+
+      const output = await utils.getCommandOutput('failing-command');
+      expect(output).toBe('success-result');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should clear cache on calling resetCommandOutputCache', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'first-val',
+        stderr: '',
+        exitCode: 0
+      });
+
+      // Restore real getCommandOutput from utils
+      getCommandOutputSpy.mockRestore();
+
+      await utils.getCommandOutput('reset-test-command');
+
+      utils.resetCommandOutputCache();
+
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'second-val',
+        stderr: '',
+        exitCode: 0
+      });
+
+      const output = await utils.getCommandOutput('reset-test-command');
+      expect(output).toBe('second-val');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
     });
   });
 

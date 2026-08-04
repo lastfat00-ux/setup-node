@@ -1,13 +1,15 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
 import path from 'path';
+import * as exec from '@actions/exec';
 import * as utils from '../src/cache-utils';
 import {
   PackageManagerInfo,
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
@@ -359,6 +361,71 @@ describe('cache-utils', () => {
         ]);
       }
     );
+  });
+
+  describe('getCommandOutput memoization and cache invalidation', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      getCommandOutputSpy.mockRestore();
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+      resetCommandOutputCache();
+    });
+
+    it('should memoize command outputs and return identical Promise (promise identity)', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v20.0.0\n',
+        stderr: ''
+      });
+
+      const promise1 = utils.getCommandOutput('node --version');
+      const promise2 = utils.getCommandOutput('node --version');
+
+      expect(promise1).toBe(promise2);
+
+      const result1 = await promise1;
+      const result2 = await promise2;
+
+      expect(result1).toBe('v20.0.0');
+      expect(result2).toBe('v20.0.0');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should not cache rejections and delete them on failure', async () => {
+      getExecOutputSpy.mockRejectedValueOnce(new Error('Spawn error'));
+      getExecOutputSpy.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: 'recovered',
+        stderr: ''
+      });
+
+      await expect(utils.getCommandOutput('fail-cmd')).rejects.toThrow();
+
+      const result = await utils.getCommandOutput('fail-cmd');
+      expect(result).toBe('recovered');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should clear cache on resetCommandOutputCache', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'output',
+        stderr: ''
+      });
+
+      const result1 = await utils.getCommandOutput('some-cmd');
+      resetCommandOutputCache();
+      const result2 = await utils.getCommandOutput('some-cmd');
+
+      expect(result1).toBe('output');
+      expect(result2).toBe('output');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

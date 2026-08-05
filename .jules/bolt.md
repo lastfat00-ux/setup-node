@@ -5,3 +5,7 @@
 ## 2025-05-15 - [Cleanup after Install]
 **Learning:** Running `pnpm install` can create a lockfile (like `pnpm-lock.yaml`) if it doesn't exist, which should not be committed unless requested.
 **Action:** Always check for and remove any auto-generated lockfiles or temporary scripts before submission.
+
+## 2025-05-15 - [Promise Memoization & Dog-piling Prevention]
+**Learning:** Caching computed values in asynchronous flows can lead to "dog-piling" (where concurrent invocations duplicate work before the first call finishes) or caching stale/failed responses. Caching the active Promise immediately instead of the resolved value ensures all simultaneous queries await the same operation.
+**Action:** Always memoize the Promise object immediately and register a `.catch` callback on it to evict the key on failure, preventing permanent caching of transient errors.

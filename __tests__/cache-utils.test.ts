@@ -362,6 +362,81 @@ describe('cache-utils', () => {
   });
 });
 
+describe('getCommandOutput memoization', () => {
+  const pristineEnv = process.env;
+
+  beforeEach(() => {
+    process.env = {...pristineEnv};
+    utils.resetCommandOutputCache();
+  });
+
+  afterEach(() => {
+    utils.resetCommandOutputCache();
+  });
+
+  afterAll(() => {
+    process.env = pristineEnv;
+  });
+
+  it('should memoize command outputs', async () => {
+    const exec = jest.requireActual('@actions/exec');
+    const execSpy = jest.spyOn(exec, 'getExecOutput');
+    execSpy.mockResolvedValue({
+      stdout: 'my-mocked-output\n',
+      stderr: '',
+      exitCode: 0
+    });
+
+    // Call getCommandOutput multiple times with same parameters
+    const output1 = await utils.getCommandOutput('some-command', 'some-cwd');
+    const output2 = await utils.getCommandOutput('some-command', 'some-cwd');
+
+    expect(output1).toBe('my-mocked-output');
+    expect(output2).toBe('my-mocked-output');
+    // Ensure getExecOutput is called only once
+    expect(execSpy).toHaveBeenCalledTimes(1);
+
+    execSpy.mockRestore();
+  });
+
+  it('should invalidate cache if resetCommandOutputCache is called', async () => {
+    const exec = jest.requireActual('@actions/exec');
+    const execSpy = jest.spyOn(exec, 'getExecOutput');
+    execSpy.mockResolvedValue({
+      stdout: 'output',
+      stderr: '',
+      exitCode: 0
+    });
+
+    await utils.getCommandOutput('some-command', 'some-cwd');
+    utils.resetCommandOutputCache();
+    await utils.getCommandOutput('some-command', 'some-cwd');
+
+    expect(execSpy).toHaveBeenCalledTimes(2);
+
+    execSpy.mockRestore();
+  });
+
+  it('should not cache errors', async () => {
+    const exec = jest.requireActual('@actions/exec');
+    const execSpy = jest.spyOn(exec, 'getExecOutput');
+    execSpy
+      .mockRejectedValueOnce(new Error('command failed'))
+      .mockResolvedValueOnce({
+        stdout: 'success',
+        stderr: '',
+        exitCode: 0
+      });
+
+    await expect(utils.getCommandOutput('failing-command')).rejects.toThrow('command failed');
+    const output = await utils.getCommandOutput('failing-command');
+    expect(output).toBe('success');
+    expect(execSpy).toHaveBeenCalledTimes(2);
+
+    execSpy.mockRestore();
+  });
+});
+
 describe('isGhes', () => {
   const pristineEnv = process.env;
 

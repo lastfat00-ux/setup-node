@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
 import {
@@ -359,6 +360,97 @@ describe('cache-utils', () => {
         ]);
       }
     );
+  });
+
+  describe('getCommandOutput with memoization', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      // Restore the mock of utils.getCommandOutput to test its real implementation
+      if (getCommandOutputSpy) {
+        getCommandOutputSpy.mockRestore();
+      }
+      utils.resetCommandOutputCache();
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      utils.resetCommandOutputCache();
+      if (getExecOutputSpy) {
+        getExecOutputSpy.mockRestore();
+      }
+    });
+
+    it('should cache successful command outputs and return identical promise instances', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.0.0\n',
+        stderr: ''
+      });
+
+      const p1 = utils.getCommandOutput('node --version');
+      const p2 = utils.getCommandOutput('node --version');
+
+      expect(p1).toBe(p2); // Object identity / equality
+      const result1 = await p1;
+      const result2 = await p2;
+
+      expect(result1).toBe('v1.0.0');
+      expect(result2).toBe('v1.0.0');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('should distinguish cache keys based on command, cwd, and process.env.PATH', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.0.0',
+        stderr: ''
+      });
+
+      const p1 = utils.getCommandOutput('node --version', '/dir1');
+      const p2 = utils.getCommandOutput('node --version', '/dir2');
+      const p3 = utils.getCommandOutput('npm --version', '/dir1');
+
+      expect(p1).not.toBe(p2);
+      expect(p1).not.toBe(p3);
+
+      await Promise.all([p1, p2, p3]);
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it('should remove promise from cache on command execution failure', async () => {
+      getExecOutputSpy.mockRejectedValueOnce(new Error('Spawn failed'));
+
+      await expect(utils.getCommandOutput('fail-cmd')).rejects.toThrow('Spawn failed');
+
+      // Subsequent call should trigger a new attempt instead of returning a rejected promise
+      getExecOutputSpy.mockResolvedValueOnce({
+        exitCode: 0,
+        stdout: 'recovered',
+        stderr: ''
+      });
+
+      const p2 = utils.getCommandOutput('fail-cmd');
+      const res = await p2;
+      expect(res).toBe('recovered');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('should reset command output cache successfully', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.0.0',
+        stderr: ''
+      });
+
+      const p1 = utils.getCommandOutput('node --version');
+      utils.resetCommandOutputCache();
+      const p2 = utils.getCommandOutput('node --version');
+
+      expect(p1).not.toBe(p2);
+      await Promise.all([p1, p2]);
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

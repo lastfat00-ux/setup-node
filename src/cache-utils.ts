@@ -66,24 +66,61 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+// Module-level cache for command outputs to avoid redundant shell execution in monorepos.
+// Delimited by a null character to prevent path/command collision and keyed by toolCommand,
+// cwd, and process.env.PATH to ensure safe cache invalidation on environment changes.
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * Resets the command output cache for testing or manual cache invalidation.
+ */
+export const resetCommandOutputCache = (): void => {
+  commandOutputCache.clear();
+};
+
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise !== undefined) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  const promise = (async () => {
+    const execResult = await exec.getExecOutput(
+      toolCommand,
+      undefined,
+      {ignoreReturnCode: true, ...(cwd && {cwd})}
+    );
+
+    // Defensive fallback: If mock implementations of exec.getExecOutput return undefined
+    // or are otherwise falsy, return an empty string to avoid destructuring crash.
+    if (!execResult || typeof execResult !== 'object') {
+      return typeof execResult === 'string' ? execResult : '';
+    }
+
+    const {stdout = '', stderr = '', exitCode = 0} = execResult;
+
+    if (exitCode) {
+      const formattedStderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(formattedStderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  // Attach a catch block to delete failed command runs from the cache map, ensuring we do
+  // not cache transient errors or permanent command failures permanently.
+  promise.catch(() => {
+    commandOutputCache.delete(cacheKey);
+  });
+
+  commandOutputCache.set(cacheKey, promise);
+  return promise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +128,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

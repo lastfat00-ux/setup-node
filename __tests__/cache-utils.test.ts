@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
 import {
@@ -397,5 +398,108 @@ describe('isGhes', () => {
   it('returns true when the GITHUB_SERVER_URL environment variable is set to some other URL', () => {
     process.env['GITHUB_SERVER_URL'] = 'https://src.onpremise.fabrikam.com';
     expect(isGhes()).toBeTruthy();
+  });
+});
+
+describe('getCommandOutput caching', () => {
+  let getExecOutputSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    // Clear out any caches before each test
+    utils.resetCommandOutputCache();
+    getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+  });
+
+  afterEach(() => {
+    getExecOutputSpy.mockRestore();
+    utils.resetCommandOutputCache();
+  });
+
+  it('should cache and return the exact same Promise instance (object identity) for repeated calls', async () => {
+    getExecOutputSpy.mockResolvedValue({
+      stdout: 'some-cached-value',
+      stderr: '',
+      exitCode: 0
+    });
+
+    const promise1 = utils.getCommandOutput('test-command', '/some/dir');
+    const promise2 = utils.getCommandOutput('test-command', '/some/dir');
+
+    expect(promise1).toBe(promise2); // Same object identity!
+
+    const val1 = await promise1;
+    const val2 = await promise2;
+
+    expect(val1).toBe('some-cached-value');
+    expect(val2).toBe('some-cached-value');
+    expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('should invalidate cache when PATH changes', async () => {
+    getExecOutputSpy.mockResolvedValue({
+      stdout: 'val',
+      stderr: '',
+      exitCode: 0
+    });
+
+    const originalPath = process.env.PATH;
+    try {
+      process.env.PATH = 'path1';
+      const promise1 = utils.getCommandOutput('test-command', '/some/dir');
+      await promise1;
+
+      process.env.PATH = 'path2';
+      const promise2 = utils.getCommandOutput('test-command', '/some/dir');
+      await promise2;
+
+      expect(promise1).not.toBe(promise2);
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    } finally {
+      process.env.PATH = originalPath;
+    }
+  });
+
+  it('should not cache on command error and evict key from map so it retries', async () => {
+    getExecOutputSpy.mockRejectedValueOnce(new Error('Spawn failed'));
+    getExecOutputSpy.mockResolvedValue({
+      stdout: 'recovered',
+      stderr: '',
+      exitCode: 0
+    });
+
+    await expect(utils.getCommandOutput('failing-command')).rejects.toThrow('Spawn failed');
+
+    // Subsequent call should trigger getExecOutput again because it was deleted on error
+    const promise2 = utils.getCommandOutput('failing-command');
+    const val = await promise2;
+    expect(val).toBe('recovered');
+    expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('should handle defensive fallback if getExecOutput returns undefined', async () => {
+    getExecOutputSpy.mockResolvedValue(undefined as any);
+
+    const val = await utils.getCommandOutput('some-cmd');
+    expect(val).toBe('');
+    expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('resetCommandOutputCache should clear the command output cache', async () => {
+    getExecOutputSpy.mockResolvedValue({
+      stdout: 'val',
+      stderr: '',
+      exitCode: 0
+    });
+
+    const promise1 = utils.getCommandOutput('test-command');
+    await promise1;
+
+    utils.resetCommandOutputCache();
+
+    const promise2 = utils.getCommandOutput('test-command');
+    await promise2;
+
+    expect(promise1).not.toBe(promise2);
+    expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
   });
 });

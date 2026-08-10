@@ -7,8 +7,10 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
+import * as exec from '@actions/exec';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
 import * as glob from '@actions/glob';
@@ -54,6 +56,86 @@ describe('cache-utils', () => {
     console.log('::stoptoken::');
     jest.restoreAllMocks();
   }, 100000);
+
+  describe('getCommandOutput memoization', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      getCommandOutputSpy.mockRestore();
+      resetCommandOutputCache();
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+    });
+
+    it('memoizes identical commands and directories', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'test-output',
+        stderr: '',
+        exitCode: 0
+      });
+
+      // Fire multiple requests concurrently
+      const [res1, res2] = await Promise.all([
+        utils.getCommandOutput('node --version', 'my-dir'),
+        utils.getCommandOutput('node --version', 'my-dir')
+      ]);
+
+      expect(res1).toBe('test-output');
+      expect(res2).toBe('test-output');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+      // Subsequent call also returns cached value
+      const res3 = await utils.getCommandOutput('node --version', 'my-dir');
+      expect(res3).toBe('test-output');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('distinguishes different commands or directories', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'test-output',
+        stderr: '',
+        exitCode: 0
+      });
+
+      await utils.getCommandOutput('node --version', 'dir1');
+      await utils.getCommandOutput('node --version', 'dir2');
+      await utils.getCommandOutput('npm --version', 'dir1');
+
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not permanently cache failures', async () => {
+      getExecOutputSpy.mockRejectedValueOnce(new Error('command failed'));
+      getExecOutputSpy.mockResolvedValueOnce({
+        stdout: 'success',
+        stderr: '',
+        exitCode: 0
+      });
+
+      await expect(utils.getCommandOutput('node --version', 'dir')).rejects.toThrow('command failed');
+
+      const res = await utils.getCommandOutput('node --version', 'dir');
+      expect(res).toBe('success');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('clears cache when resetCommandOutputCache is called', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'test',
+        stderr: '',
+        exitCode: 0
+      });
+
+      await utils.getCommandOutput('node --version');
+      resetCommandOutputCache();
+      await utils.getCommandOutput('node --version');
+
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
+  });
 
   describe('getPackageManagerInfo', () => {
     it.each<[string, PackageManagerInfo | null]>([

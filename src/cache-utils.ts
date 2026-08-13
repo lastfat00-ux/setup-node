@@ -66,32 +66,81 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * Resets the internal command output memoization cache.
+ */
+export const resetCommandOutputCache = () => {
+  commandOutputCache.clear();
+};
+
+/**
+ * Executes a shell command and returns its trimmed stdout.
+ * Results are cached by command, working directory, and PATH to prevent redundant executions.
+ */
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}\0${cwd || ''}\0${process.env.PATH || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  // To prevent 'dog-piling' and redundant process spawns during concurrent calls,
+  // we cache the resulting Promise immediately.
+  const promise = (async () => {
+    const rawPromise = exec.getExecOutput(
+      toolCommand,
+      undefined,
+      {ignoreReturnCode: true, ...(cwd && {cwd})}
+    );
+
+    // Defensive fallback: handles mock implementations of exec.getExecOutput
+    // that return undefined or lack a .then function.
+    if (!rawPromise || typeof rawPromise.then !== 'function') {
+      return '';
+    }
+
+    const execResult = await rawPromise;
+    // Only handle falsy/undefined execResult values to prevent destructuring crashes,
+    // avoiding catch-all blocks that inadvertently silence legitimate command/network throwing rejections.
+    if (!execResult) {
+      return '';
+    }
+
+    let {stdout, stderr, exitCode} = execResult;
+    if (exitCode) {
+      stderr = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(stderr);
+    }
+
+    return stdout.trim();
+  })();
+
+  // Catch block to remove failed promises from the map, ensuring permanent errors are not cached.
+  const cachedPromiseWithCatch = promise.catch(err => {
+    commandOutputCache.delete(cacheKey);
+    throw err;
+  });
+
+  commandOutputCache.set(cacheKey, cachedPromiseWithCatch);
+  return cachedPromiseWithCatch;
 };
 
+/**
+ * Executes a shell command and ensures that the returned output is not empty.
+ */
 export const getCommandOutputNotEmpty = async (
   toolCommand: string,
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }

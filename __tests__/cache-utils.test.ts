@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
 import {
@@ -397,5 +398,103 @@ describe('isGhes', () => {
   it('returns true when the GITHUB_SERVER_URL environment variable is set to some other URL', () => {
     process.env['GITHUB_SERVER_URL'] = 'https://src.onpremise.fabrikam.com';
     expect(isGhes()).toBeTruthy();
+  });
+});
+
+describe('getCommandOutput memoization', () => {
+  let execGetExecOutputSpy: jest.SpyInstance;
+
+  beforeEach(() => {
+    execGetExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    utils.resetCommandOutputCache();
+  });
+
+  afterEach(() => {
+    execGetExecOutputSpy.mockRestore();
+  });
+
+  it('memoizes identical commands and returns the same Promise object', async () => {
+    execGetExecOutputSpy.mockResolvedValue({
+      exitCode: 0,
+      stdout: 'v1.0.0',
+      stderr: ''
+    });
+
+    const promise1 = utils.getCommandOutput('yarn --version');
+    const promise2 = utils.getCommandOutput('yarn --version');
+
+    expect(promise1).toBe(promise2); // Same Promise object identity
+
+    const result1 = await promise1;
+    const result2 = await promise2;
+
+    expect(result1).toBe('v1.0.0');
+    expect(result2).toBe('v1.0.0');
+    expect(execGetExecOutputSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not memoize across different working directories', async () => {
+    execGetExecOutputSpy.mockResolvedValue({
+      exitCode: 0,
+      stdout: 'some-path',
+      stderr: ''
+    });
+
+    const promise1 = utils.getCommandOutput('yarn cache dir', '/dir1');
+    const promise2 = utils.getCommandOutput('yarn cache dir', '/dir2');
+
+    expect(promise1).not.toBe(promise2);
+
+    await promise1;
+    await promise2;
+
+    expect(execGetExecOutputSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('removes failed promises from cache so they can be retried', async () => {
+    execGetExecOutputSpy.mockRejectedValueOnce(new Error('command failed'));
+    execGetExecOutputSpy.mockResolvedValueOnce({
+      exitCode: 0,
+      stdout: 'success',
+      stderr: ''
+    });
+
+    await expect(utils.getCommandOutput('failing-command')).rejects.toThrow('command failed');
+
+    // Next call should run again because the failed promise was removed from the cache
+    const promise = utils.getCommandOutput('failing-command');
+    const result = await promise;
+
+    expect(result).toBe('success');
+    expect(execGetExecOutputSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('resets the cache when resetCommandOutputCache is called', async () => {
+    execGetExecOutputSpy.mockResolvedValue({
+      exitCode: 0,
+      stdout: 'result',
+      stderr: ''
+    });
+
+    const promise1 = utils.getCommandOutput('command');
+    await promise1;
+
+    utils.resetCommandOutputCache();
+
+    const promise2 = utils.getCommandOutput('command');
+    await promise2;
+
+    expect(promise1).not.toBe(promise2);
+    expect(execGetExecOutputSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it('defensively handles undefined and non-thenable mock implementations', async () => {
+    // If getExecOutput returns undefined
+    execGetExecOutputSpy.mockReturnValue(undefined);
+    await expect(utils.getCommandOutput('mock-undefined')).resolves.toBe('');
+
+    // If getExecOutput returns an object that is not a promise (lacks .then)
+    execGetExecOutputSpy.mockReturnValue({ notAPromise: true } as any);
+    await expect(utils.getCommandOutput('mock-no-then')).resolves.toBe('');
   });
 });

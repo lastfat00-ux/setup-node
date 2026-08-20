@@ -7,8 +7,10 @@ import {
   isCacheFeatureAvailable,
   supportedPackageManagers,
   isGhes,
-  resetProjectDirectoriesMemoized
+  resetProjectDirectoriesMemoized,
+  resetCommandOutputCache
 } from '../src/cache-utils';
+import * as exec from '@actions/exec';
 import fs from 'fs';
 import * as cacheUtils from '../src/cache-utils';
 import * as glob from '@actions/glob';
@@ -100,6 +102,55 @@ describe('cache-utils', () => {
     process.env['GITHUB_SERVER_URL'] = '';
     jest.resetAllMocks();
     jest.clearAllMocks();
+  });
+
+  describe('getCommandOutput memoization', () => {
+    let getExecOutputSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      getCommandOutputSpy.mockRestore();
+      resetCommandOutputCache();
+      getExecOutputSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      getExecOutputSpy.mockRestore();
+    });
+
+    it('memoizes identical command calls and returns same Promise instance', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'v18.0.0\n',
+        stderr: '',
+        exitCode: 0
+      });
+
+      const p1 = utils.getCommandOutput('node --version');
+      const p2 = utils.getCommandOutput('node --version');
+
+      expect(p1).toBe(p2);
+      const res1 = await p1;
+      const res2 = await p2;
+
+      expect(res1).toBe('v18.0.0');
+      expect(res2).toBe('v18.0.0');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('executes again if resetCommandOutputCache is called', async () => {
+      getExecOutputSpy.mockResolvedValue({
+        stdout: 'v18.0.0\n',
+        stderr: '',
+        exitCode: 0
+      });
+
+      await utils.getCommandOutput('node --version');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(1);
+
+      resetCommandOutputCache();
+
+      await utils.getCommandOutput('node --version');
+      expect(getExecOutputSpy).toHaveBeenCalledTimes(2);
+    });
   });
 
   describe('getCacheDirectoriesPaths', () => {

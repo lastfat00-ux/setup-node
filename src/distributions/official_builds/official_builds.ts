@@ -233,19 +233,27 @@ export default class OfficialBuilds extends BaseDistribution {
 
     // Supported formats are `lts/<alias>`, `lts/*`, and `lts/-n`. Where asterisk means highest possible LTS and -n means the nth-highest.
     const n = Number(alias);
-    const aliases = Object.fromEntries(
-      manifest
-        .filter(x => x.lts && x.stable === stable)
-        .map(x => [x.lts!.toLowerCase(), x])
-        .reverse()
-    );
-    const numbered = Object.values(aliases);
-    const release =
-      alias === '*'
-        ? numbered[numbered.length - 1]
-        : n < 0
-          ? numbered[numbered.length - 1 + n]
-          : aliases[alias];
+
+    // Single-pass reverse iteration using Map to avoid multiple array allocations (.filter, .map, .reverse)
+    // and intermediate Object conversions when resolving LTS aliases.
+    const aliasesMap = new Map<string, INodeRelease>();
+    for (let i = manifest.length - 1; i >= 0; i--) {
+      const item = manifest[i];
+      if (item.lts && item.stable === stable) {
+        aliasesMap.set(item.lts.toLowerCase(), item);
+      }
+    }
+
+    let release: INodeRelease | undefined;
+    if (alias === '*') {
+      const values = Array.from(aliasesMap.values());
+      release = values[values.length - 1];
+    } else if (n < 0) {
+      const values = Array.from(aliasesMap.values());
+      release = values[values.length - 1 + n];
+    } else {
+      release = aliasesMap.get(alias);
+    }
 
     if (!release) {
       throw new Error(

@@ -118,9 +118,8 @@ describe('cache-utils', () => {
 
       globCreateSpy = jest.spyOn(glob, 'create');
 
-      globCreateSpy.mockImplementation(
-        (pattern: string): Promise<Globber> =>
-          MockGlobber.create(['/foo', '/bar'])
+      globCreateSpy.mockImplementation((pattern: string): Promise<Globber> =>
+        MockGlobber.create(['/foo', '/bar'])
       );
 
       resetProjectDirectoriesMemoized();
@@ -232,9 +231,8 @@ describe('cache-utils', () => {
         getCommandOutputSpy.mockImplementation((command: string) =>
           command.includes('version') ? version : `file_${version}_${dirNo++}`
         );
-        globCreateSpy.mockImplementation(
-          (pattern: string): Promise<Globber> =>
-            MockGlobber.create(['/tmp/dir1/file', '/tmp/dir2/file'])
+        globCreateSpy.mockImplementation((pattern: string): Promise<Globber> =>
+          MockGlobber.create(['/tmp/dir1/file', '/tmp/dir2/file'])
         );
 
         const dirs = await cacheUtils.getCacheDirectories(
@@ -252,13 +250,12 @@ describe('cache-utils', () => {
         getCommandOutputSpy.mockImplementation((command: string) =>
           command.includes('version') ? version : `file_${version}_${dirNo++}`
         );
-        globCreateSpy.mockImplementation(
-          (pattern: string): Promise<Globber> =>
-            MockGlobber.create([
-              '/tmp/dir1/file',
-              '/tmp/dir2/file',
-              '/tmp/dir1/file'
-            ])
+        globCreateSpy.mockImplementation((pattern: string): Promise<Globber> =>
+          MockGlobber.create([
+            '/tmp/dir1/file',
+            '/tmp/dir2/file',
+            '/tmp/dir1/file'
+          ])
         );
 
         const dirs = await cacheUtils.getCacheDirectories(
@@ -278,13 +275,12 @@ describe('cache-utils', () => {
             ? version
             : `file_${version}_${dirNo++ % 2}`
         );
-        globCreateSpy.mockImplementation(
-          (pattern: string): Promise<Globber> =>
-            MockGlobber.create([
-              '/tmp/dir1/file',
-              '/tmp/dir2/file',
-              '/tmp/dir3/file'
-            ])
+        globCreateSpy.mockImplementation((pattern: string): Promise<Globber> =>
+          MockGlobber.create([
+            '/tmp/dir1/file',
+            '/tmp/dir2/file',
+            '/tmp/dir3/file'
+          ])
         );
 
         const dirs = await cacheUtils.getCacheDirectories(
@@ -334,14 +330,13 @@ describe('cache-utils', () => {
           /tmp/dir2/file
 /tmp/**/file
           `;
-        globCreateSpy.mockImplementation(
-          (pattern: string): Promise<Globber> =>
-            MockGlobber.create([
-              '/tmp/dir1/file',
-              '/tmp/dir2/file',
-              '/tmp/dir3/file',
-              '/tmp/dir4/file'
-            ])
+        globCreateSpy.mockImplementation((pattern: string): Promise<Globber> =>
+          MockGlobber.create([
+            '/tmp/dir1/file',
+            '/tmp/dir2/file',
+            '/tmp/dir3/file',
+            '/tmp/dir4/file'
+          ])
         );
         let dirNo = 1;
         getCommandOutputSpy.mockImplementation((command: string) =>

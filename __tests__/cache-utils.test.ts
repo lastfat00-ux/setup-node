@@ -1,5 +1,6 @@
 import * as core from '@actions/core';
 import * as cache from '@actions/cache';
+import * as exec from '@actions/exec';
 import path from 'path';
 import * as utils from '../src/cache-utils';
 import {
@@ -359,6 +360,70 @@ describe('cache-utils', () => {
         ]);
       }
     );
+  });
+
+  describe('getCommandOutput memoization', () => {
+    let execSpy: jest.SpyInstance;
+
+    beforeEach(() => {
+      cacheUtils.resetCommandOutputCache();
+      getCommandOutputSpy.mockRestore();
+      execSpy = jest.spyOn(exec, 'getExecOutput');
+    });
+
+    afterEach(() => {
+      execSpy.mockRestore();
+      getCommandOutputSpy = jest.spyOn(utils, 'getCommandOutput');
+    });
+
+    it('memoizes output for identical command and cwd', async () => {
+      execSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.2.3\n',
+        stderr: ''
+      });
+
+      const res1 = await utils.getCommandOutput('node --version');
+      const res2 = await utils.getCommandOutput('node --version');
+
+      expect(res1).toBe('v1.2.3');
+      expect(res2).toBe('v1.2.3');
+      expect(execSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('clears memoized cache on resetCommandOutputCache', async () => {
+      execSpy.mockResolvedValue({
+        exitCode: 0,
+        stdout: 'v1.2.3\n',
+        stderr: ''
+      });
+
+      await utils.getCommandOutput('node --version');
+      cacheUtils.resetCommandOutputCache();
+      await utils.getCommandOutput('node --version');
+
+      expect(execSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('deletes cached promise on command failure so retries can occur', async () => {
+      execSpy
+        .mockResolvedValueOnce({
+          exitCode: 1,
+          stdout: '',
+          stderr: 'error'
+        })
+        .mockResolvedValueOnce({
+          exitCode: 0,
+          stdout: 'v1.2.3\n',
+          stderr: ''
+        });
+
+      await expect(utils.getCommandOutput('node --version')).rejects.toThrow('error');
+
+      const res = await utils.getCommandOutput('node --version');
+      expect(res).toBe('v1.2.3');
+      expect(execSpy).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

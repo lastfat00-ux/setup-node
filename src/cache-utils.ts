@@ -66,24 +66,52 @@ export const supportedPackageManagers: SupportedPackageManagers = {
   }
 };
 
-export const getCommandOutput = async (
+const commandOutputCache = new Map<string, Promise<string>>();
+
+/**
+ * Resets the command output memoization cache.
+ * Useful for test isolation.
+ */
+export const resetCommandOutputCache = () => commandOutputCache.clear();
+
+/**
+ * Memoizes shell command output to prevent redundant child process spawns in monorepos.
+ * Caches the Promise immediately to handle concurrent requests (dog-piling prevention).
+ */
+export const getCommandOutput = (
   toolCommand: string,
   cwd?: string
 ): Promise<string> => {
-  let {stdout, stderr, exitCode} = await exec.getExecOutput(
-    toolCommand,
-    undefined,
-    {ignoreReturnCode: true, ...(cwd && {cwd})}
-  );
-
-  if (exitCode) {
-    stderr = !stderr.trim()
-      ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
-      : stderr;
-    throw new Error(stderr);
+  const cacheKey = `${toolCommand}:\0${cwd || ''}:\0${process.env.PATH || ''}`;
+  const cachedPromise = commandOutputCache.get(cacheKey);
+  if (cachedPromise) {
+    return cachedPromise;
   }
 
-  return stdout.trim();
+  const promise = (async () => {
+    const execResult = await exec.getExecOutput(
+      toolCommand,
+      undefined,
+      {ignoreReturnCode: true, ...(cwd && {cwd})}
+    );
+
+    const {stdout = '', stderr = '', exitCode = 0} = execResult || {};
+
+    if (exitCode) {
+      const errorMsg = !stderr.trim()
+        ? `The '${toolCommand}' command failed with exit code: ${exitCode}`
+        : stderr;
+      throw new Error(errorMsg);
+    }
+
+    return stdout.trim();
+  })();
+
+  // Remove from cache on failure to allow retries
+  promise.catch(() => commandOutputCache.delete(cacheKey));
+
+  commandOutputCache.set(cacheKey, promise);
+  return promise;
 };
 
 export const getCommandOutputNotEmpty = async (
@@ -91,7 +119,7 @@ export const getCommandOutputNotEmpty = async (
   error: string,
   cwd?: string
 ): Promise<string> => {
-  const stdOut = getCommandOutput(toolCommand, cwd);
+  const stdOut = await getCommandOutput(toolCommand, cwd);
   if (!stdOut) {
     throw new Error(error);
   }
@@ -122,8 +150,10 @@ let projectDirectoriesMemoized: string[] | null = null;
 /**
  * unit test must reset memoized variables
  */
-export const resetProjectDirectoriesMemoized = () =>
-  (projectDirectoriesMemoized = null);
+export const resetProjectDirectoriesMemoized = () => {
+  projectDirectoriesMemoized = null;
+  resetCommandOutputCache();
+};
 /**
  * Expands (converts) the string input `cache-dependency-path` to list of directories that
  * may be project roots

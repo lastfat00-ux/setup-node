@@ -75,9 +75,12 @@ const findLockFile = (packageManager: PackageManagerInfo) => {
   const lockFiles = packageManager.lockFilePatterns;
   const workspace = process.env.GITHUB_WORKSPACE!;
 
-  const rootContent = fs.readdirSync(workspace);
-
-  const lockFile = lockFiles.find(item => rootContent.includes(item));
+  // Optimization: Check lock file existence directly using fs.existsSync instead of
+  // reading all workspace directory entries via fs.readdirSync. This avoids array allocations
+  // and disk scan overhead in large repositories.
+  const lockFile = lockFiles.find(item =>
+    fs.existsSync(path.join(workspace, item))
+  );
   if (!lockFile) {
     throw new Error(
       `Dependencies lock file is not found in ${workspace}. Supported file patterns: ${lockFiles.toString()}`

@@ -81561,14 +81561,20 @@ class BasePrereleaseNodejs extends base_distribution_1.default {
         let toolPath = '';
         const localVersionPaths = tc
             .findAllVersions('node', this.nodeInfo.arch)
-            .filter(i => {
-            const prerelease = semver_1.default.prerelease(i, {});
-            if (!prerelease) {
+            // Schwartzian transform: pre-parse versions once to avoid redundant parsing during filter and sort
+            .map(version => ({
+            version,
+            parsed: semver_1.default.parse(version)
+        }))
+            .filter(item => {
+            const prerelease = item.parsed?.prerelease;
+            if (!prerelease || prerelease.length === 0) {
                 return false;
             }
             return prerelease[0].toString().includes(this.distribution);
-        });
-        localVersionPaths.sort(semver_1.default.rcompare);
+        })
+            .sort((a, b) => b.parsed.compare(a.parsed))
+            .map(item => item.version);
         const localVersion = this.evaluateVersions(localVersionPaths);
         if (localVersion) {
             toolPath = tc.find('node', localVersion, this.nodeInfo.arch);
@@ -81652,6 +81658,10 @@ class BaseDistribution {
     nodeInfo;
     httpClient;
     osPlat = os_1.default.platform();
+    static nodeJsVersionsCache = new Map();
+    static resetCache() {
+        BaseDistribution.nodeJsVersionsCache.clear();
+    }
     constructor(nodeInfo) {
         this.nodeInfo = nodeInfo;
         this.httpClient = new hc.HttpClient('setup-node', [], {
@@ -81693,9 +81703,12 @@ class BaseDistribution {
     evaluateVersions(versions) {
         let version = '';
         const { range, options } = this.validRange(this.nodeInfo.versionSpec);
+        // Pre-parse the range to avoid redundant parsing in the loop
+        const rangeObj = new semver_1.default.Range(range, options);
         core.debug(`evaluating ${versions.length} versions`);
         for (const potential of versions) {
-            const satisfied = semver_1.default.satisfies(potential, range, options);
+            // Use rangeObj.test() instead of semver.satisfies() for direct evaluation
+            const satisfied = rangeObj.test(potential);
             if (satisfied) {
                 version = potential;
                 break;
@@ -81715,11 +81728,22 @@ class BaseDistribution {
     async getNodeJsVersions() {
         const initialUrl = this.getDistributionUrl(this.nodeInfo.mirror);
         const dataUrl = `${initialUrl}/index.json`;
+        // Caching based on URL and mirrorToken to prevent redundant network requests
+        // within the same execution flow.
+        const cacheKey = `${dataUrl}:${this.nodeInfo.mirrorToken || ''}`;
+        const cachedPromise = BaseDistribution.nodeJsVersionsCache.get(cacheKey);
+        if (cachedPromise) {
+            core.debug(`Using cached nodejs versions for ${dataUrl}`);
+            const response = await cachedPromise;
+            return response.result || [];
+        }
         const headers = {};
         if (this.nodeInfo.mirrorToken) {
             headers['Authorization'] = this.nodeInfo.mirrorToken;
         }
-        const response = await this.httpClient.getJson(dataUrl, headers);
+        const responsePromise = this.httpClient.getJson(dataUrl, headers);
+        BaseDistribution.nodeJsVersionsCache.set(cacheKey, responsePromise);
+        const response = await responsePromise;
         return response.result || [];
     }
     getNodejsDistInfo(version) {
@@ -81870,15 +81894,17 @@ class BaseDistribution {
         return dataFileName;
     }
     filterVersions(nodeJsVersions) {
-        const versions = [];
         const dataFileName = this.getDistFileName();
-        nodeJsVersions.forEach((nodeVersion) => {
-            // ensure this version supports your os and platform
-            if (nodeVersion.files.indexOf(dataFileName) >= 0) {
-                versions.push(nodeVersion.version);
-            }
-        });
-        return versions.sort(semver_1.default.rcompare);
+        return nodeJsVersions
+            .filter(nodeVersion => nodeVersion.files.includes(dataFileName))
+            // Schwartzian transform: pre-parse versions to avoid redundant parsing during sort (O(N) vs O(N log N))
+            .map(nodeVersion => ({
+            version: nodeVersion.version,
+            parsed: semver_1.default.parse(nodeVersion.version)
+        }))
+            .filter(item => item.parsed !== null)
+            .sort((a, b) => b.parsed.compare(a.parsed))
+            .map(item => item.version);
     }
     translateArchToDistUrl(arch) {
         switch (arch) {
@@ -82008,6 +82034,11 @@ const tc = __importStar(__nccwpck_require__(33472));
 const path_1 = __importDefault(__nccwpck_require__(16928));
 const base_distribution_1 = __importDefault(__nccwpck_require__(60709));
 class OfficialBuilds extends base_distribution_1.default {
+    static manifestCache = new Map();
+    static resetCache() {
+        OfficialBuilds.manifestCache.clear();
+        base_distribution_1.default.resetCache();
+    }
     constructor(nodeInfo) {
         super(nodeInfo);
     }
@@ -82120,8 +82151,21 @@ class OfficialBuilds extends base_distribution_1.default {
         return `${url}/dist`;
     }
     getManifest() {
+        const auth = this.nodeInfo.mirror
+            ? this.nodeInfo.mirrorToken
+            : this.nodeInfo.auth;
+        // Cache manifest based on auth token to prevent redundant network requests
+        // while ensuring correct isolation.
+        const cacheKey = auth || 'anonymous';
+        const cachedPromise = OfficialBuilds.manifestCache.get(cacheKey);
+        if (cachedPromise) {
+            core.debug('Using cached manifest from actions/node-versions@main');
+            return cachedPromise;
+        }
         core.debug('Getting manifest from actions/node-versions@main');
-        return tc.getManifestFromRepo('actions', 'node-versions', this.nodeInfo.mirror ? this.nodeInfo.mirrorToken : this.nodeInfo.auth, 'main');
+        const responsePromise = tc.getManifestFromRepo('actions', 'node-versions', auth, 'main');
+        OfficialBuilds.manifestCache.set(cacheKey, responsePromise);
+        return responsePromise;
     }
     resolveLtsAliasFromManifest(versionSpec, stable, manifest) {
         const alias = versionSpec.split('lts/')[1]?.toLowerCase();
@@ -82131,16 +82175,21 @@ class OfficialBuilds extends base_distribution_1.default {
         core.debug(`LTS alias '${alias}' for Node version '${versionSpec}'`);
         // Supported formats are `lts/<alias>`, `lts/*`, and `lts/-n`. Where asterisk means highest possible LTS and -n means the nth-highest.
         const n = Number(alias);
-        const aliases = Object.fromEntries(manifest
-            .filter(x => x.lts && x.stable === stable)
-            .map(x => [x.lts.toLowerCase(), x])
-            .reverse());
-        const numbered = Object.values(aliases);
+        // Optimize LTS resolution by traversing manifest in reverse once with a Map,
+        // avoiding multiple array allocations (.filter, .map, .reverse, Object.fromEntries, Object.values).
+        const aliasesMap = new Map();
+        for (let i = manifest.length - 1; i >= 0; i--) {
+            const x = manifest[i];
+            if (x.lts && x.stable === stable) {
+                aliasesMap.set(x.lts.toLowerCase(), x);
+            }
+        }
+        const numbered = Array.from(aliasesMap.values());
         const release = alias === '*'
             ? numbered[numbered.length - 1]
             : n < 0
                 ? numbered[numbered.length - 1 + n]
-                : aliases[alias];
+                : aliasesMap.get(alias);
         if (!release) {
             throw new Error(`Unable to find LTS release '${alias}' for Node version '${versionSpec}'.`);
         }
